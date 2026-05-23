@@ -69,6 +69,15 @@ public sealed class TeacherHandler : HandlerBase
                 ResetState(userId);
                 await ShowStudentSelectionAsync(userId, chatId, "send", ct);
                 return;
+            case "menu_search":
+                await ShowSearchStudentSelectionAsync(userId, chatId, ct);
+                return;
+        }
+
+        if (data.StartsWith("search_for_"))
+        {
+            await HandleSearchStudentSelectedAsync(userId, chatId, data, ct);
+            return;
         }
 
         if (data.StartsWith("send_to_"))
@@ -519,4 +528,76 @@ public sealed class TeacherHandler : HandlerBase
             .OrderBy(group => group.First().CreatedAt)
             .Select(group => group.ToList())
             .ToList();
+
+    // ── Search ────────────────────────────────────────────────────────────────
+
+    private async Task ShowSearchStudentSelectionAsync(long teacherId, long chatId, CancellationToken ct)
+    {
+        var students = await Db.GetStudentsForTeacherAsync(teacherId);
+        if (students.Count == 0)
+        {
+            await Bot.SendMessage(chatId,
+                "You have no students yet. Use *Add Student* first.",
+                parseMode: ParseMode.Markdown, cancellationToken: ct);
+            return;
+        }
+
+        await Bot.SendMessage(
+            chatId,
+            "🔍 Choose a student to search vocabulary for:",
+            replyMarkup: Keyboards.StudentList(students, "search_for_"),
+            cancellationToken: ct);
+    }
+
+    private async Task HandleSearchStudentSelectedAsync(long userId, long chatId, string data, CancellationToken ct)
+    {
+        var studentId = long.Parse(data["search_for_".Length..]);
+        var student   = await Db.GetUserAsync(studentId);
+
+        SetState(userId, new ConversationState
+        {
+            State             = UserState.AwaitingSearchQuery,
+            SelectedStudentId = studentId
+        });
+
+        await Bot.SendMessage(
+            chatId,
+            $"🔍 Searching vocabulary for *{WordFormatter.EscapeMarkdown(student?.DisplayName ?? studentId.ToString())}*\n\nType the word or phrase to search:",
+            parseMode: ParseMode.Markdown,
+            replyMarkup: Keyboards.BackButton("back_to_menu"),
+            cancellationToken: ct);
+    }
+
+    public async Task HandleSearchQueryAsync(long userId, long chatId, string query, CancellationToken ct)
+    {
+        var state     = GetState(userId);
+        var studentId = state.SelectedStudentId;
+        if (studentId is null) { await GoMenuAsync(userId, chatId, ct); return; }
+
+        var results = await Db.SearchWordsAsync(studentId.Value, query);
+        ResetState(userId);
+
+        var navigation = Keyboards.TeacherSearchResultNavigation(studentId.Value);
+
+        if (results.Count == 0)
+        {
+            await Bot.SendMessage(
+                chatId,
+                $"🔍 No results found for *{WordFormatter.EscapeMarkdown(query)}*.",
+                parseMode: ParseMode.Markdown,
+                replyMarkup: navigation,
+                cancellationToken: ct);
+            return;
+        }
+
+        var student = await Db.GetUserAsync(studentId.Value);
+        var body    = string.Join("\n\n", results.Select(WordFormatter.FormatWordLine));
+
+        await Bot.SendMessage(
+            chatId,
+            $"🔍 *{results.Count}* result(s) for *{WordFormatter.EscapeMarkdown(query)}* in {WordFormatter.EscapeMarkdown(student?.DisplayName ?? string.Empty)}'s vocabulary:\n\n{body}",
+            parseMode: ParseMode.Markdown,
+            replyMarkup: navigation,
+            cancellationToken: ct);
+    }
 }

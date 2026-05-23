@@ -28,6 +28,14 @@ public sealed class StudentHandler : HandlerBase
             case "menu_my_words":
                 await ShowMyWordsAsync(userId, chatId, ct);
                 break;
+            case "menu_search":
+                SetState(userId, new ConversationState { State = UserState.AwaitingSearchQuery });
+                await Bot.SendMessage(
+                    chatId,
+                    "🔍 Type the word or phrase to search in your vocabulary:",
+                    replyMarkup: Keyboards.BackButton("back_to_menu"),
+                    cancellationToken: ct);
+                break;
             case "vocab_all":
                 await SendWordListAsync(chatId, await Db.GetWordsForStudentAsync(userId), "📚 Your vocabulary:", ct);
                 break;
@@ -38,6 +46,31 @@ public sealed class StudentHandler : HandlerBase
                 }
                 break;
         }
+    }
+
+    public async Task HandleSearchQueryAsync(long userId, long chatId, string query, CancellationToken ct)
+    {
+        var results = await Db.SearchWordsAsync(userId, query);
+        ResetState(userId);
+
+        if (results.Count == 0)
+        {
+            await Bot.SendMessage(
+                chatId,
+                $"🔍 No results found for *{WordFormatter.EscapeMarkdown(query)}*.",
+                parseMode: ParseMode.Markdown,
+                replyMarkup: Keyboards.SearchResultNavigation(),
+                cancellationToken: ct);
+            return;
+        }
+
+        var body = string.Join("\n\n", results.Select(WordFormatter.FormatWordLine));
+        await Bot.SendMessage(
+            chatId,
+            $"🔍 *{results.Count}* result(s) for *{WordFormatter.EscapeMarkdown(query)}*:\n\n{body}",
+            parseMode: ParseMode.Markdown,
+            replyMarkup: Keyboards.SearchResultNavigation(),
+            cancellationToken: ct);
     }
 
     private async Task ShowMyWordsAsync(long userId, long chatId, CancellationToken ct)

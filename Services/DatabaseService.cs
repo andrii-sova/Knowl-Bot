@@ -386,4 +386,93 @@ public class DatabaseService : IDatabaseService
             .Take(top)
             .ToListAsync();
     }
+
+    /// <summary>
+    /// Fuzzy word search using a two-pass strategy:
+    ///   1. SQL-side pre-filter with LIKE for substring matches (fast index scan).
+    ///   2. In-memory Levenshtein on remaining words with an adaptive distance
+    ///      threshold that scales with word length so short words require closer
+    ///      matches than long ones.
+    /// Results are ordered: exact substring hits first, then fuzzy hits by distance,
+    /// both groups sorted by CEFR level.
+    /// </summary>
+    public async Task<List<Word>> SearchWordsAsync(long studentId, string query, int maxResults = 15)
+    {
+        await using var ctx = Ctx();
+        var q = query.Trim().ToLower();
+        if (string.IsNullOrEmpty(q)) return [];
+
+        // Pass 1 — SQL: substring match (uses index seek on varchar column).
+        var substringHits = await ctx.Words
+            .Where(w => w.ForStudentId == studentId &&
+                        (w.OriginalWord.ToLower().Contains(q) || w.Translation.ToLower().Contains(q)))
+            .OrderBy(w => w.EnglishLevel ?? "Z")
+            .Take(maxResults)
+            .ToListAsync();
+
+        if (substringHits.Count >= maxResults)
+            return substringHits;
+
+        // Pass 2 — in-memory Levenshtein on words NOT already in the substring results.
+        var substringIds = substringHits.Select(w => w.Id).ToHashSet();
+
+        var candidates = await ctx.Words
+            .Where(w => w.ForStudentId == studentId && !substringIds.Contains(w.Id))
+            .ToListAsync();
+
+        var fuzzyHits = candidates
+            .Select(w =>
+            {
+                var orig = w.OriginalWord.ToLower();
+                var dist = Levenshtein(q, orig);
+                return (Word: w, Distance: dist);
+            })
+            .Where(x => x.Distance <= AdaptiveThreshold(q.Length, x.Word.OriginalWord.Length))
+            .OrderBy(x => x.Distance)
+            .ThenBy(x => x.Word.EnglishLevel ?? "Z")
+            .Take(maxResults - substringHits.Count)
+            .Select(x => x.Word)
+            .ToList();
+
+        return [.. substringHits, .. fuzzyHits];
+    }
+
+    /// <summary>
+    /// Maximum allowed Levenshtein distance based on the lengths of query and target word.
+    /// Short words get a tight threshold; longer words allow proportionally more edits.
+    /// </summary>
+    private static int AdaptiveThreshold(int queryLen, int wordLen)
+    {
+        var maxLen = Math.Max(queryLen, wordLen);
+        return maxLen switch
+        {
+            <= 3  => 0,   // "cat" must match exactly
+            <= 5  => 1,   // "house" allows 1 typo
+            <= 8  => 2,   // "morning" allows 2 typos
+            <= 12 => 3,   // "comfortable" allows 3 typos
+            _     => (int)(maxLen * 0.25) // 25% of longer word length
+        };
+    }
+
+    /// <summary>Standard iterative Levenshtein distance (O(n*m) time, O(n) space).</summary>
+    private static int Levenshtein(string a, string b)
+    {
+        if (a.Length == 0) return b.Length;
+        if (b.Length == 0) return a.Length;
+
+        var prev = Enumerable.Range(0, b.Length + 1).ToArray();
+        var curr = new int[b.Length + 1];
+
+        for (var i = 1; i <= a.Length; i++)
+        {
+            curr[0] = i;
+            for (var j = 1; j <= b.Length; j++)
+            {
+                var cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                curr[j] = Math.Min(Math.Min(prev[j] + 1, curr[j - 1] + 1), prev[j - 1] + cost);
+            }
+            Array.Copy(curr, prev, curr.Length);
+        }
+        return prev[b.Length];
+    }
 }

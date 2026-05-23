@@ -16,7 +16,8 @@ public enum UserState
     AwaitingPersonalWords,
     AwaitingTopicChoice,
     AwaitingTopicName,
-    AwaitingQuizCustomAmount
+    AwaitingQuizCustomAmount,
+    AwaitingSearchQuery
 }
 
 public class ConversationState

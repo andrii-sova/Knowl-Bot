@@ -85,6 +85,8 @@ public class BotService
                 await HandleTopicNameInputAsync(userId, chatId, text, state, ct);    break;
             case UserState.AwaitingQuizCustomAmount:
                 await HandleQuizCustomAmountAsync(userId, chatId, text, ct);         break;
+            case UserState.AwaitingSearchQuery:
+                await HandleSearchQueryAsync(userId, chatId, text, ct);              break;
             default:
                 var user = await _db.GetUserAsync(userId);
                 if (user is not null) await SendMainMenuAsync(chatId, user.Role, ct);
@@ -131,6 +133,10 @@ public class BotService
                 replyMarkup: BackKeyboard("back_to_menu"), cancellationToken: ct);
         }
         else if (data == "menu_my_words") await ShowMyWordsAsync(userId, chatId, ct);
+
+        // ── Search ───────────────────────────────────────────────────────────
+        else if (data == "menu_search")   await HandleMenuSearchAsync(userId, chatId, ct);
+        else if (data.StartsWith("search_for_")) await HandleSearchForStudentAsync(userId, chatId, data, ct);
 
         // ── Shared: set display name ─────────────────────────────────────────
         else if (data == "menu_set_name")
@@ -337,7 +343,7 @@ public class BotService
                 {
                     new[]
                     {
-                        InlineKeyboardButton.WithCallbackData("✅ Yes, remove",  $"confirm_remove_{studentId}"),
+                        InlineKeyboardButton.WithCallbackData("✅ Remove",  $"confirm_remove_{studentId}"),
                         InlineKeyboardButton.WithCallbackData("❌ Cancel",        "back_to_menu")
                     }
                 }),
@@ -774,8 +780,8 @@ public class BotService
             {
                 new[]
                 {
-                    InlineKeyboardButton.WithCallbackData("🇬🇧 → 🇺🇦  Eng → Ukr", "quiz_dir_eu"),
-                    InlineKeyboardButton.WithCallbackData("🇺🇦 → 🇬🇧  Ukr → Eng", "quiz_dir_ue")
+                    InlineKeyboardButton.WithCallbackData("🇬🇧→🇺🇦 Eng→Ukr", "quiz_dir_eu"),
+                    InlineKeyboardButton.WithCallbackData("🇺🇦→🇬🇧 Ukr→Eng", "quiz_dir_ue")
                 },
                 new[] { InlineKeyboardButton.WithCallbackData("❌ Cancel", "quiz_cancel") }
             }),
@@ -1088,8 +1094,8 @@ public class BotService
             parseMode: ParseMode.Markdown,
             replyMarkup: new InlineKeyboardMarkup(new[]
             {
-                new[] { InlineKeyboardButton.WithCallbackData("👨‍🏫 Sent by me",         "wfilter_teacher") },
-                new[] { InlineKeyboardButton.WithCallbackData("🧑 Stored by student",   "wfilter_student") },
+                new[] { InlineKeyboardButton.WithCallbackData("👨‍🏫 By teacher",         "wfilter_teacher") },
+                new[] { InlineKeyboardButton.WithCallbackData("🧑 By student",   "wfilter_student") },
                 new[] { InlineKeyboardButton.WithCallbackData("📋 Both",                "wfilter_both")    },
                 new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back",               "back_to_menu")    }
             }),
@@ -1101,9 +1107,9 @@ public class BotService
             replyMarkup: new InlineKeyboardMarkup(new[]
             {
                 new[] { InlineKeyboardButton.WithCallbackData("🏷️ By topic",         "wmode_topic")    },
-                new[] { InlineKeyboardButton.WithCallbackData("📦 By chunks of 20",  "wmode_chunks")   },
-                new[] { InlineKeyboardButton.WithCallbackData("💬 By messages",       "wmode_messages") },
-                new[] { InlineKeyboardButton.WithCallbackData("📋 All at once",       "wmode_all")      },
+                new[] { InlineKeyboardButton.WithCallbackData("📦 By chunks",  "wmode_chunks")   },
+                new[] { InlineKeyboardButton.WithCallbackData("💬 By message",       "wmode_messages") },
+                new[] { InlineKeyboardButton.WithCallbackData("📋 All",       "wmode_all")      },
                 new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back",             "back_to_menu")   }
             }),
             cancellationToken: ct);
@@ -1212,14 +1218,15 @@ public class BotService
                     },
                     new[]
                     {
-                        InlineKeyboardButton.WithCallbackData("👥 My Students",   "menu_my_students"),
+                        InlineKeyboardButton.WithCallbackData("👥 Students",   "menu_my_students"),
                         InlineKeyboardButton.WithCallbackData("📋 Words Sent",    "menu_words_sent")
                     },
                     new[]
                     {
                         InlineKeyboardButton.WithCallbackData("🗑 Remove Student", "menu_remove_student"),
-                        InlineKeyboardButton.WithCallbackData("✏️ My Name",        "menu_set_name")
-                    }
+                        InlineKeyboardButton.WithCallbackData("🔍 Search Words",   "menu_search")
+                    },
+                    new[] { InlineKeyboardButton.WithCallbackData("✏️ My Name", "menu_set_name") }
                 }),
                 cancellationToken: ct);
         }
@@ -1230,11 +1237,15 @@ public class BotService
                 {
                     new[]
                     {
-                        InlineKeyboardButton.WithCallbackData("📝 Add My Words",  "menu_add_words"),
-                        InlineKeyboardButton.WithCallbackData("📚 My Vocabulary", "menu_my_words")
+                        InlineKeyboardButton.WithCallbackData("📝 Add Words",  "menu_add_words"),
+                        InlineKeyboardButton.WithCallbackData("📚 Vocabulary", "menu_my_words")
                     },
-                    new[] { InlineKeyboardButton.WithCallbackData("🧩 Quiz",       "menu_quiz") },
-                    new[] { InlineKeyboardButton.WithCallbackData("✏️ My Name",    "menu_set_name") }
+                    new[]
+                    {
+                        InlineKeyboardButton.WithCallbackData("🧩 Quiz",          "menu_quiz"),
+                        InlineKeyboardButton.WithCallbackData("🔍 Search Words",  "menu_search")
+                    },
+                    new[] { InlineKeyboardButton.WithCallbackData("✏️ My Name",   "menu_set_name") }
                 }),
                 cancellationToken: ct);
         }
@@ -1308,7 +1319,7 @@ public class BotService
             new[]
             {
                 hasMore
-                    ? InlineKeyboardButton.WithCallbackData("▶️ Next chunk", "browse_next")
+                    ? InlineKeyboardButton.WithCallbackData("▶️ Next", "browse_next")
                     : InlineKeyboardButton.WithCallbackData("✅ Done",        "browse_cancel"),
                 InlineKeyboardButton.WithCallbackData("❌ Cancel", "browse_cancel")
             }
@@ -1327,6 +1338,113 @@ public class BotService
             .OrderBy(g => g.First().CreatedAt)
             .Select(g => g.ToList())
             .ToList();
+
+    // ── Search ─────────────────────────────────────────────────────────────────
+
+    private async Task HandleMenuSearchAsync(long userId, long chatId, CancellationToken ct)
+    {
+        var user = await _db.GetUserAsync(userId);
+        if (user?.Role == "Teacher")
+        {
+            // Teacher: pick student first
+            var students = await _db.GetStudentsForTeacherAsync(userId);
+            if (students.Count == 0)
+            {
+                await _bot.SendMessage(chatId,
+                    "You have no students yet. Use *Add Student* first.",
+                    parseMode: ParseMode.Markdown, cancellationToken: ct);
+                return;
+            }
+
+            await _bot.SendMessage(chatId,
+                "🔍 Choose a student to search vocabulary for:",
+                replyMarkup: new InlineKeyboardMarkup(
+                    students
+                        .Select(s => new[] { InlineKeyboardButton.WithCallbackData(s.DisplayName, $"search_for_{s.TelegramId}") })
+                        .Append(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back", "back_to_menu") })
+                        .ToArray()),
+                cancellationToken: ct);
+        }
+        else
+        {
+            // Student: search own vocabulary directly
+            SetState(userId, new ConversationState { State = UserState.AwaitingSearchQuery });
+            await _bot.SendMessage(chatId,
+                "🔍 Type the word or phrase to search in your vocabulary:",
+                replyMarkup: BackKeyboard("back_to_menu"),
+                cancellationToken: ct);
+        }
+    }
+
+    private async Task HandleSearchForStudentAsync(long userId, long chatId, string data, CancellationToken ct)
+    {
+        var studentId = long.Parse(data["search_for_".Length..]);
+        var student   = await _db.GetUserAsync(studentId);
+
+        SetState(userId, new ConversationState
+        {
+            State             = UserState.AwaitingSearchQuery,
+            SelectedStudentId = studentId
+        });
+
+        await _bot.SendMessage(chatId,
+            $"🔍 Searching vocabulary for *{EscapeMd(student?.DisplayName ?? studentId.ToString())}*\n\nType the word or phrase to search:",
+            parseMode: ParseMode.Markdown,
+            replyMarkup: BackKeyboard("back_to_menu"),
+            cancellationToken: ct);
+    }
+
+    private async Task HandleSearchQueryAsync(long userId, long chatId, string query, CancellationToken ct)
+    {
+        var user      = await _db.GetUserAsync(userId);
+        var state     = GetState(userId);
+        var isTeacher = user?.Role == "Teacher";
+        var searchId  = isTeacher ? state.SelectedStudentId ?? userId : userId;
+        var studentId = state.SelectedStudentId;
+
+        var results = await _db.SearchWordsAsync(searchId, query);
+        ResetState(userId);
+
+        var navigation = isTeacher && studentId.HasValue
+            ? new InlineKeyboardMarkup(new[]
+            {
+                new[] { InlineKeyboardButton.WithCallbackData("🔍 Search again", $"search_for_{studentId.Value}") },
+                new[] { InlineKeyboardButton.WithCallbackData("👥 Other student",         "menu_search") },
+                new[] { InlineKeyboardButton.WithCallbackData("⬅️ Menu",                 "back_to_menu") }
+            })
+            : new InlineKeyboardMarkup(new[]
+            {
+                new[] { InlineKeyboardButton.WithCallbackData("🔍 Search again", "menu_search") },
+                new[] { InlineKeyboardButton.WithCallbackData("⬅️ Menu", "back_to_menu") }
+            });
+
+        if (results.Count == 0)
+        {
+            await _bot.SendMessage(chatId,
+                $"🔍 No results found for *{EscapeMd(query)}*.",
+                parseMode: ParseMode.Markdown,
+                replyMarkup: navigation,
+                cancellationToken: ct);
+            return;
+        }
+
+        VocabifyBot.Models.User? student = isTeacher && studentId.HasValue ? await _db.GetUserAsync(studentId.Value) : null;
+        var who  = student is not null ? $" in {EscapeMd(student.DisplayName)}'s vocabulary" : string.Empty;
+        var body = string.Join("\n\n", results.Select(w => FormatWord(w)));
+
+        await _bot.SendMessage(chatId,
+            $"🔍 *{results.Count}* result(s) for *{EscapeMd(query)}*{who}:\n\n{body}",
+            parseMode: ParseMode.Markdown,
+            replyMarkup: navigation,
+            cancellationToken: ct);
+    }
+
+    private static string FormatWord(VocabifyBot.Models.Word w)
+    {
+        var level = w.EnglishLevel is not null ? $" *[{w.EnglishLevel}]*" : string.Empty;
+        var topic = w.Topic is not null ? $"\n🏷️ _{EscapeMd(w.Topic)}_" : string.Empty;
+        return $"*{EscapeMd(w.OriginalWord)}*{level} — {w.Translation}{topic}";
+    }
 
     private const int ChunkSize = 20;
 
