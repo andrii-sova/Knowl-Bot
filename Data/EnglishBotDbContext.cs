@@ -23,6 +23,7 @@ public class EnglishBotDbContext : DbContext
             b.Property(u => u.FirstName).HasMaxLength(255).IsRequired();
             b.Property(u => u.DisplayNameOverride).HasMaxLength(60);
             b.Property(u => u.Role).HasMaxLength(20).IsRequired();
+            b.Property(u => u.IsActivated).HasDefaultValue(false);
             b.Property(u => u.CreatedAt).HasDefaultValueSql("GETDATE()");
             b.Ignore(u => u.DisplayName);
         });

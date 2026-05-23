@@ -1381,13 +1381,17 @@ public class BotService
 
     private async Task SendMainMenuAsync(long chatId, string role, CancellationToken ct, long userId = 0)
     {
-        if (role == "Student" && userId != 0 && !await _db.IsStudentLinkedToAnyTeacherAsync(userId))
+        if (role == "Student" && userId != 0)
         {
-            await _bot.SendMessage(chatId,
-                "🔒 You haven't been added to a teacher's group yet.\n\n" +
-                "Please ask your teacher to add you by your Telegram username.",
-                cancellationToken: ct);
-            return;
+            var student = await _db.GetUserAsync(userId);
+            if (student is not null && !student.IsActivated)
+            {
+                await _bot.SendMessage(chatId,
+                    "🔒 You haven't been added to a teacher's group yet.\n\n" +
+                    "Please ask your teacher to add you by your Telegram username.",
+                    cancellationToken: ct);
+                return;
+            }
         }
 
         if (role == "Teacher")

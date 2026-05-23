@@ -20,6 +20,15 @@ public class DatabaseService : IDatabaseService
     {
         await using var ctx = Ctx();
         await ctx.Database.EnsureCreatedAsync();
+
+        // Idempotent migration: add IsActivated column if upgrading from an older schema
+        await ctx.Database.ExecuteSqlRawAsync("""
+            IF NOT EXISTS (
+                SELECT 1 FROM sys.columns
+                WHERE object_id = OBJECT_ID(N'Users') AND name = N'IsActivated'
+            )
+            ALTER TABLE Users ADD IsActivated BIT NOT NULL DEFAULT 0
+            """);
     }
 
     // ── Users ────────────────────────────────────────────────────────────────
@@ -80,8 +89,16 @@ public class DatabaseService : IDatabaseService
         if (!exists)
         {
             ctx.TeacherStudents.Add(new TeacherStudent { TeacherId = teacherId, StudentId = studentId });
-            await ctx.SaveChangesAsync();
         }
+
+        // Mark the student as activated so they retain access even if later removed
+        var student = await ctx.Users.FindAsync(studentId);
+        if (student is not null && !student.IsActivated)
+        {
+            student.IsActivated = true;
+        }
+
+        await ctx.SaveChangesAsync();
     }
 
     public async Task UnlinkTeacherStudentAsync(long teacherId, long studentId)
@@ -155,6 +172,14 @@ public class DatabaseService : IDatabaseService
                     TeacherId = inv.TeacherId,
                     StudentId = studentId
                 });
+        }
+
+        if (pending.Count > 0)
+        {
+            // Mark the student as activated so they retain access even if later removed
+            var student = await ctx.Users.FindAsync(studentId);
+            if (student is not null)
+                student.IsActivated = true;
         }
 
         ctx.PendingInvitations.RemoveRange(pending);

@@ -7,6 +7,7 @@ public class User
     public string   FirstName           { get; set; } = "";
     public string?  DisplayNameOverride { get; set; }      // user-set custom display name
     public string   Role                { get; set; } = "";
+    public bool     IsActivated         { get; set; }      // true once a teacher has ever linked this student
     public DateTime CreatedAt           { get; set; }
 
     // Navigation
