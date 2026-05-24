@@ -1,12 +1,26 @@
-using OpenAI;
-using OpenAI.Chat;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
 using VocabifyBot.Interfaces;
 
 namespace VocabifyBot.Services;
 
-public sealed class OpenAiService(string apiKey) : IOpenAiService
+public sealed class ClaudeService : IOpenAiService
 {
-    private readonly ChatClient _chat = new OpenAIClient(apiKey).GetChatClient("gpt-4o-mini");
+    private const string ApiUrl = "https://api.anthropic.com/v1/messages";
+    private const string Model = "claude-opus-4-7";
+
+    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+    private readonly HttpClient _http;
+
+    public ClaudeService(string apiKey)
+    {
+        _http = new HttpClient();
+        _http.DefaultRequestHeaders.Add("x-api-key", apiKey);
+        _http.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
+        _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+    }
 
     private const string TranslationPrompt = @"You are an English-to-Ukrainian dictionary assistant for language learners.
 Translate English words or phrases into Ukrainian following EXACTLY this format for each entry (one entry per line):
@@ -26,23 +40,18 @@ Example output:
 
     public async Task<string> TranslateWordsAsync(string words)
     {
-        var result = await _chat.CompleteChatAsync(
-            new SystemChatMessage(TranslationPrompt),
-            new UserChatMessage($"Translate these words/phrases (one per line):\n{words.Trim()}")
-        );
-        return result.Value.Content is { Count: > 0 } content ? content[0].Text.Trim() : string.Empty;
+        return await SendAsync(
+            TranslationPrompt,
+            $"Translate these words/phrases (one per line):\n{words.Trim()}");
     }
 
     public async Task<string> DetectTopicAsync(string words)
     {
-        var result = await _chat.CompleteChatAsync(
-            new SystemChatMessage(
-                "Identify the most fitting topic/category for the given English words or phrases. " +
-                "Reply with 2-4 words only (e.g. 'Phrasal Verbs', 'Business English', 'B2 Vocabulary', " +
-                "'Adjectives', 'Travel & Transport'). No explanation, just the topic name."),
-            new UserChatMessage(words.Trim())
-        );
-        return result.Value.Content is { Count: > 0 } content ? content[0].Text.Trim() : string.Empty;
+        return await SendAsync(
+            "Identify the most fitting topic/category for the given English words or phrases. " +
+            "Reply with 2-4 words only (e.g. 'Phrasal Verbs', 'Business English', 'B2 Vocabulary', " +
+            "'Adjectives', 'Travel & Transport'). No explanation, just the topic name.",
+            words.Trim());
     }
 
     public async Task<string> GenerateWordsByLevelAsync(
@@ -72,10 +81,32 @@ Rules:
 - Choose natural, useful everyday words a learner at {level} would need{excludeClause}
 - Output ONLY the word entries, no headers, numbers or extra text";
 
-        var result = await _chat.CompleteChatAsync(
-            new SystemChatMessage(systemPrompt),
-            new UserChatMessage($"Generate {count} {level} words.")
-        );
-        return result.Value.Content is { Count: > 0 } content ? content[0].Text.Trim() : string.Empty;
+        return await SendAsync(systemPrompt, $"Generate {count} {level} words.");
+    }
+
+    private async Task<string> SendAsync(string systemPrompt, string userMessage)
+    {
+        var body = JsonSerializer.Serialize(new
+        {
+            model = Model,
+            max_tokens = 2048,
+            system = systemPrompt,
+            messages = new[] { new { role = "user", content = userMessage } }
+        }, JsonOptions);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, ApiUrl)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json")
+        };
+
+        using var response = await _http.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        return doc.RootElement
+            .GetProperty("content")[0]
+            .GetProperty("text")
+            .GetString()
+            ?.Trim() ?? string.Empty;
     }
 }

@@ -34,7 +34,7 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
                     cancellationToken: ct);
                 break;
             case "vocab_all":
-                await SendWordListAsync(chatId, await Db.GetWordsForStudentAsync(userId), "📚 Your vocabulary:", ct);
+                await SendWordListAsync(userId, chatId, await Db.GetWordsForStudentAsync(userId), "📚 Your vocabulary:", ct);
                 break;
             case "vocab_level":
                 await Bot.SendMessage(chatId, "🔤 Select a CEFR level:", replyMarkup: Keyboards.VocabLevelButtons(), cancellationToken: ct);
@@ -47,6 +47,14 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
                 else if (data.StartsWith("vocab_lvl_"))
                 {
                     await ShowWordsByLevelAsync(userId, chatId, data["vocab_lvl_".Length..], ct);
+                }
+                else if (data == "vocab_page_next")
+                {
+                    await HandleVocabPageAsync(userId, chatId, +1, ct);
+                }
+                else if (data == "vocab_page_prev")
+                {
+                    await HandleVocabPageAsync(userId, chatId, -1, ct);
                 }
                 break;
         }
@@ -108,7 +116,7 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
     private async Task ShowWordsByLevelAsync(long userId, long chatId, string level, CancellationToken ct)
     {
         var words = await Db.GetWordsByLevelAsync(userId, level);
-        await SendWordListAsync(chatId, words, $"🔤 *{WordFormatter.EscapeMarkdown(level)}* words:", ct);
+        await SendWordListAsync(userId, chatId, words, $"🔤 *{WordFormatter.EscapeMarkdown(level)}* words:", ct);
     }
 
     private async Task ShowWordsByTopicAsync(long userId, long chatId, string data, CancellationToken ct)
@@ -122,10 +130,10 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
 
         var topic = state.CachedTopics[index];
         var words = await Db.GetWordsByTopicAsync(userId, topic);
-        await SendWordListAsync(chatId, words, $"📚 {WordFormatter.EscapeMarkdown(topic)}:", ct);
+        await SendWordListAsync(userId, chatId, words, $"📚 {WordFormatter.EscapeMarkdown(topic)}:", ct);
     }
 
-    private async Task SendWordListAsync(long chatId, IReadOnlyList<Word> words, string header, CancellationToken ct)
+    private async Task SendWordListAsync(long userId, long chatId, IReadOnlyList<Word> words, string header, CancellationToken ct)
     {
         if (words.Count == 0)
         {
@@ -133,15 +141,50 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
             return;
         }
 
+        MutateState(userId, state =>
+        {
+            state.VocabWords = words.ToList();
+            state.VocabPage = 0;
+            state.VocabHeader = header;
+        });
+
+        await SendVocabPageAsync(userId, chatId, ct);
+    }
+
+    private async Task SendVocabPageAsync(long userId, long chatId, CancellationToken ct)
+    {
         const int pageSize = 15;
-        var page = words.Take(pageSize).ToList();
-        var body = string.Join("\n\n", page.Select(WordFormatter.FormatWordLine));
-        var suffix = words.Count > pageSize ? $"\n\n_(Showing {pageSize} of {words.Count})_" : string.Empty;
+        var state = GetState(userId);
+        var words = state.VocabWords;
+        var page = state.VocabPage;
+        var totalPages = (int)Math.Ceiling(words.Count / (double)pageSize);
+
+        var slice = words.Skip(page * pageSize).Take(pageSize).ToList();
+        var body = string.Join("\n\n", slice.Select(WordFormatter.FormatWordLine));
+        var pageInfo = totalPages > 1
+            ? $"\n\n_Page {page + 1}/{totalPages} · {words.Count} words_"
+            : $"\n\n_{words.Count} word{(words.Count == 1 ? "" : "s")}_";
 
         await Bot.SendMessage(
             chatId,
-            $"{header}\n\n{body}{suffix}",
+            $"{state.VocabHeader}\n\n{body}{pageInfo}",
             parseMode: ParseMode.Markdown,
+            replyMarkup: Keyboards.VocabPageNavigation(page, totalPages),
             cancellationToken: ct);
+    }
+
+    private async Task HandleVocabPageAsync(long userId, long chatId, int delta, CancellationToken ct)
+    {
+        const int pageSize = 15;
+        var state = GetState(userId);
+        if (state.VocabWords.Count == 0)
+        {
+            await GoMenuAsync(userId, chatId, ct);
+            return;
+        }
+
+        var totalPages = (int)Math.Ceiling(state.VocabWords.Count / (double)pageSize);
+        MutateState(userId, s => s.VocabPage = Math.Clamp(state.VocabPage + delta, 0, totalPages - 1));
+        await SendVocabPageAsync(userId, chatId, ct);
     }
 }

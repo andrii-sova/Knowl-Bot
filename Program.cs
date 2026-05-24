@@ -14,14 +14,14 @@ var config = new ConfigurationBuilder()
     .Build();
 
 var botToken = config["BotToken"]!;
-var openAiKey = config["OpenAiKey"]!;
+var claudeApiKey = config["ClaudeApiKey"]!;
 var connectionString = config.GetConnectionString("Default")!;
 
 var services = new ServiceCollection();
 services.AddSingleton<ITelegramBotClient>(_ => new TelegramBotClient(botToken));
 services.AddSingleton(_ => new DbContextOptionsBuilder<EnglishBotDbContext>().UseSqlServer(connectionString).Options);
 services.AddSingleton<IDatabaseService, DatabaseService>();
-services.AddSingleton<IOpenAiService>(_ => new OpenAiService(openAiKey));
+services.AddSingleton<IOpenAiService>(_ => new ClaudeService(claudeApiKey));
 services.AddSingleton<ConversationStateManager>();
 services.AddSingleton<RegistrationHandler>();
 services.AddSingleton<TeacherHandler>();

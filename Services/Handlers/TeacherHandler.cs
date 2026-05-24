@@ -86,6 +86,9 @@ public sealed class TeacherHandler(
             case "browse_next":
                 await HandleBrowseNextAsync(userId, chatId, ct);
                 return;
+            case "browse_prev":
+                await HandleBrowsePrevAsync(userId, chatId, ct);
+                return;
             case "browse_cancel":
                 await CancelBrowsingAsync(userId, chatId, ct);
                 return;
@@ -676,13 +679,21 @@ public sealed class TeacherHandler(
     {
         var state = GetState(userId);
         if (state.BrowsingMode == "chunks")
-        {
             state.BrowsingOffset += ChunkSize;
-        }
         else
-        {
             state.BrowsingGroupIdx += 1;
-        }
+
+        SetState(userId, state);
+        await SendBrowsingPageAsync(userId, chatId, ct);
+    }
+
+    private async Task HandleBrowsePrevAsync(long userId, long chatId, CancellationToken ct)
+    {
+        var state = GetState(userId);
+        if (state.BrowsingMode == "chunks")
+            state.BrowsingOffset = Math.Max(0, state.BrowsingOffset - ChunkSize);
+        else
+            state.BrowsingGroupIdx = Math.Max(0, state.BrowsingGroupIdx - 1);
 
         SetState(userId, state);
         await SendBrowsingPageAsync(userId, chatId, ct);
@@ -710,12 +721,14 @@ public sealed class TeacherHandler(
         string header;
         List<Word> page;
         bool hasMore;
+        bool hasPrev;
 
         if (state.BrowsingMode == "chunks")
         {
             var offset = state.BrowsingOffset;
             page = state.BrowsingWords.Skip(offset).Take(ChunkSize).ToList();
             hasMore = offset + ChunkSize < state.BrowsingWords.Count;
+            hasPrev = offset > 0;
             header = $"📦 Words {offset + 1}–{offset + page.Count} of {state.BrowsingWords.Count}";
         }
         else if (state.BrowsingMode == "all")
@@ -737,6 +750,7 @@ public sealed class TeacherHandler(
 
             page = groups[index];
             hasMore = index + 1 < groups.Count;
+            hasPrev = index > 0;
             header = state.BrowsingMode == "topic"
                 ? $"🏷️ Topic: *{WordFormatter.EscapeMarkdown(page[0].Topic ?? "No topic")}* ({page.Count} words) — group {index + 1}/{groups.Count}"
                 : $"💬 Message {index + 1}/{groups.Count} — {page[0].CreatedAt:dd MMM yyyy HH:mm} ({page.Count} words)";
@@ -747,7 +761,7 @@ public sealed class TeacherHandler(
             chatId,
             $"{header}\n\n{body}",
             parseMode: ParseMode.Markdown,
-            replyMarkup: Keyboards.BrowseNavigation(hasMore),
+            replyMarkup: Keyboards.BrowseNavigation(hasPrev, hasMore),
             cancellationToken: ct);
     }
 

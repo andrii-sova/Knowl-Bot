@@ -182,19 +182,29 @@ public static class Keyboards
         new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back",        "back_to_menu") }
     });
 
-    public static InlineKeyboardMarkup BrowseNavigation(bool hasMore) => hasMore
-        ? new(new[]
-        {
-            new[]
-            {
-                InlineKeyboardButton.WithCallbackData("▶️ Next",   "browse_next"),
-                InlineKeyboardButton.WithCallbackData("❌ Cancel", "browse_cancel")
-            }
-        })
-        : new(new[]
-        {
-            new[] { InlineKeyboardButton.WithCallbackData("✅ Done", "browse_cancel") }
-        });
+    public static InlineKeyboardMarkup BrowseNavigation(bool hasPrev, bool hasMore)
+    {
+        var nav = new List<InlineKeyboardButton>();
+        if (hasPrev) nav.Add(InlineKeyboardButton.WithCallbackData("◀️ Prev", "browse_prev"));
+        if (hasMore) nav.Add(InlineKeyboardButton.WithCallbackData("▶️ Next", "browse_next"));
+
+        var rows = new List<InlineKeyboardButton[]>();
+        if (nav.Count > 0) rows.Add(nav.ToArray());
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Menu", "browse_cancel") });
+        return new(rows.ToArray());
+    }
+
+    public static InlineKeyboardMarkup VocabPageNavigation(int currentPage, int totalPages)
+    {
+        var nav = new List<InlineKeyboardButton>();
+        if (currentPage > 0) nav.Add(InlineKeyboardButton.WithCallbackData("◀️ Prev", "vocab_page_prev"));
+        if (currentPage < totalPages - 1) nav.Add(InlineKeyboardButton.WithCallbackData("▶️ Next", "vocab_page_next"));
+
+        var rows = new List<InlineKeyboardButton[]>();
+        if (nav.Count > 0) rows.Add(nav.ToArray());
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Menu", "back_to_menu") });
+        return new(rows.ToArray());
+    }
 
     public static InlineKeyboardMarkup ConfirmRemoveStudent(long studentId) => new(new[]
     {

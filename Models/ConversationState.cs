@@ -47,6 +47,10 @@ public sealed class ConversationState
 
     public List<string> CachedTopics { get; set; } = new();
 
+    public List<Word> VocabWords { get; set; } = new();
+    public int VocabPage { get; set; }
+    public string VocabHeader { get; set; } = "";
+
     public long? BrowsingStudentId { get; set; }
     public string? BrowsingFilter { get; set; }
     public string? BrowsingMode { get; set; }
