@@ -8,6 +8,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="VocabifyBot.Tests\**" />
+    <EmbeddedResource Remove="VocabifyBot.Tests\**" />
+    <None Remove="VocabifyBot.Tests\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Update="appsettings.json">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>

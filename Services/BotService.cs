@@ -126,7 +126,9 @@ public sealed class BotService(
             case UserState.AwaitingWordDeleteInput:
                 if (await DenyIfUnauthorizedTeacherAsync(userId, chatId, message.From.Username, ct)) return;
                 await teacher.HandleWordDeleteInputAsync(userId, chatId, text, ct);
-                break;            {
+                break;
+            case UserState.AwaitingWordRemoval:
+            {
                 var removalUser = await db.GetUserAsync(userId);
                 if (removalUser?.Role == "Teacher")
                 {
