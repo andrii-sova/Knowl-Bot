@@ -1,11 +1,13 @@
+using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
+
 namespace VocabifyBot.Models;
 
 public class TeacherStudent
 {
-    public long TeacherId { get; set; }
-    public long StudentId { get; set; }
-
-    // Navigation
-    public User Teacher { get; set; } = null!;
-    public User Student { get; set; } = null!;
+    [BsonId]
+    [BsonRepresentation(BsonType.ObjectId)]
+    public string Id        { get; set; } = ObjectId.GenerateNewId().ToString();
+    public long   TeacherId { get; set; }
+    public long   StudentId { get; set; }
 }

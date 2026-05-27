@@ -19,7 +19,9 @@ public enum UserState
     AwaitingQuizCustomAmount,
     AwaitingSearchQuery,
     AwaitingGenTopic,
-    AwaitingWordRemoval
+    AwaitingStudentGenTopic,
+    AwaitingWordRemoval,
+    AwaitingWordDeleteInput
 }
 
 public sealed class ConversationState
@@ -53,6 +55,10 @@ public sealed class ConversationState
     public string VocabHeader { get; set; } = "";
 
     public long? BrowsingStudentId { get; set; }
+    public long? DeleteStudentId { get; set; }
+    public List<Word> DeleteWords { get; set; } = new();
+    public string? DeleteLevel { get; set; }
+    public string? DeleteMode { get; set; } // "selected" | "keep"
     public string? BrowsingFilter { get; set; }
     public string? BrowsingMode { get; set; }
     public List<Word> BrowsingWords { get; set; } = new();

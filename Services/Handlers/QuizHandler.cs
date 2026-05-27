@@ -264,15 +264,16 @@ public sealed class QuizHandler(ITelegramBotClient bot, IDatabaseService db, Con
     private async Task HandleQuizAnswerCallbackAsync(long userId, long chatId, string data, CancellationToken ct)
     {
         var parts = data["quiz_ans_".Length..].Split('_', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length != 2 || !int.TryParse(parts[0], out var qIdx) || !int.TryParse(parts[1], out var selectedId))
+        if (parts.Length != 2 || !int.TryParse(parts[0], out var qIdx))
         {
             return;
         }
+        var selectedId = parts[1];
 
         await HandleQuizAnswerAsync(userId, chatId, qIdx, selectedId, ct);
     }
 
-    private async Task HandleQuizAnswerAsync(long userId, long chatId, int qIdx, int selectedId, CancellationToken ct)
+    private async Task HandleQuizAnswerAsync(long userId, long chatId, int qIdx, string selectedId, CancellationToken ct)
     {
         var state = GetState(userId);
         if (qIdx != state.QuizIndex || qIdx < 0 || qIdx >= state.QuizWords.Count)
@@ -376,3 +377,4 @@ public sealed class QuizHandler(ITelegramBotClient bot, IDatabaseService db, Con
             .OrderBy(_ => Random.Shared.Next())
             .ToList();
 }
+

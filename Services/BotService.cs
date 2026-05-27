@@ -17,7 +17,8 @@ public sealed class BotService(
     TeacherHandler teacher,
     StudentHandler student,
     WordEntryHandler wordEntry,
-    QuizHandler quiz)
+    QuizHandler quiz,
+    IReadOnlySet<string> allowedTeachers)
 {
     public async Task StartAsync(CancellationToken ct)
     {
@@ -88,9 +89,11 @@ public sealed class BotService(
                 await registration.HandleDisplayNameInputAsync(userId, chatId, text, ct);
                 break;
             case UserState.AwaitingStudentUsername:
+                if (await DenyIfUnauthorizedTeacherAsync(userId, chatId, message.From.Username, ct)) return;
                 await registration.HandleStudentUsernameInputAsync(userId, chatId, text, ct);
                 break;
             case UserState.AwaitingWordsForStudent when state.SelectedStudentId is not null:
+                if (await DenyIfUnauthorizedTeacherAsync(userId, chatId, message.From.Username, ct)) return;
                 await wordEntry.HandleWordsInputAsync(userId, state.SelectedStudentId.Value, text, chatId, ct);
                 break;
             case UserState.AwaitingPersonalWords:
@@ -114,11 +117,28 @@ public sealed class BotService(
                 }
                 break;
             case UserState.AwaitingGenTopic:
+                if (await DenyIfUnauthorizedTeacherAsync(userId, chatId, message.From.Username, ct)) return;
                 await teacher.HandleGenTopicInputAsync(userId, chatId, text, ct);
                 break;
-            case UserState.AwaitingWordRemoval:
-                await teacher.HandleWordRemovalInputAsync(userId, chatId, text, ct);
+            case UserState.AwaitingStudentGenTopic:
+                await student.HandleStudentGenTopicInputAsync(userId, chatId, text, ct);
                 break;
+            case UserState.AwaitingWordDeleteInput:
+                if (await DenyIfUnauthorizedTeacherAsync(userId, chatId, message.From.Username, ct)) return;
+                await teacher.HandleWordDeleteInputAsync(userId, chatId, text, ct);
+                break;            {
+                var removalUser = await db.GetUserAsync(userId);
+                if (removalUser?.Role == "Teacher")
+                {
+                    if (await DenyIfUnauthorizedTeacherAsync(userId, chatId, message.From.Username, ct)) return;
+                    await teacher.HandleWordRemovalInputAsync(userId, chatId, text, ct);
+                }
+                else
+                {
+                    await student.HandleStudentWordRemovalInputAsync(userId, chatId, text, ct);
+                }
+                break;
+            }
             default:
                 var existingUser = await db.GetUserAsync(userId);
                 if (existingUser is null)
@@ -157,6 +177,7 @@ public sealed class BotService(
             var user = await db.GetUserAsync(userId);
             if (user?.Role == "Teacher")
             {
+                if (await DenyIfUnauthorizedTeacherAsync(userId, chatId, callbackQuery.From.Username, ct)) return;
                 await teacher.HandleCallbackAsync(data, userId, chatId, ct);
             }
             else if (user?.Role == "Student")
@@ -173,6 +194,7 @@ public sealed class BotService(
 
         if (IsTeacherCallback(data))
         {
+            if (await DenyIfUnauthorizedTeacherAsync(userId, chatId, callbackQuery.From.Username, ct)) return;
             await teacher.HandleCallbackAsync(data, userId, chatId, ct);
             return;
         }
@@ -207,10 +229,14 @@ public sealed class BotService(
         data.StartsWith("browse_") ||
         data.StartsWith("wfilter_") ||
         data.StartsWith("wmode_") ||
+        data.StartsWith("wtopic_") ||
+        data.StartsWith("wlevel_") ||
         data.StartsWith("words_sent_to_") ||
         data.StartsWith("remove_student_") ||
         data.StartsWith("confirm_remove_") ||
-        data.StartsWith("search_for_");
+        data.StartsWith("search_for_") ||
+        data.StartsWith("delwords_") ||
+        data is "menu_delete_words" or "delwords_level" or "delwords_pick_delete" or "delwords_pick_keep";
 
     private static bool IsWordEntryCallback(string data) => data.StartsWith("topic_");
 
@@ -218,7 +244,9 @@ public sealed class BotService(
         data is "menu_quiz" or "menu_mistakes" || data.StartsWith("quiz_");
 
     private static bool IsStudentCallback(string data) =>
-        data is "menu_add_words" or "menu_my_words" || data.StartsWith("vocab_");
+        data is "menu_add_words" or "menu_my_words" or "stype_words" ||
+        data.StartsWith("vocab_") ||
+        data.StartsWith("sgen_");
 
     private static string FullMessage(Exception ex)
     {
@@ -235,5 +263,22 @@ public sealed class BotService(
     {
         Console.WriteLine($"⚠️ {(ex is ApiRequestException api ? $"Telegram [{api.ErrorCode}]: {api.Message}" : ex.ToString())}");
         return Task.CompletedTask;
+    }
+
+    private bool IsTeacherAuthorized(string? username) =>
+        !string.IsNullOrEmpty(username) &&
+        allowedTeachers.Contains(username.ToLowerInvariant());
+
+    private async Task<bool> DenyIfUnauthorizedTeacherAsync(long userId, long chatId, string? username, CancellationToken ct)
+    {
+        if (IsTeacherAuthorized(username))
+            return false;
+
+        states.Reset(userId);
+        await bot.SendMessage(
+            chatId,
+            "🚫 You are not authorised to perform teacher actions.",
+            cancellationToken: ct);
+        return true;
     }
 }

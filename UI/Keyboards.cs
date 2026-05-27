@@ -22,7 +22,8 @@ public static class Keyboards
             InlineKeyboardButton.WithCallbackData("🗑 Remove Student", "menu_remove_student"),
             InlineKeyboardButton.WithCallbackData("🔍 Search Words",   "menu_search")
         },
-        new[] { InlineKeyboardButton.WithCallbackData("✏️ My Name",    "menu_set_name") }
+        new[] { InlineKeyboardButton.WithCallbackData("🗂 Delete Words",  "menu_delete_words") },
+        new[] { InlineKeyboardButton.WithCallbackData("✏️ My Name",       "menu_set_name") }
     });
 
     public static InlineKeyboardMarkup StudentMenu() => new(new[]
@@ -95,8 +96,9 @@ public static class Keyboards
 
         var cancelCallback = callbackPrefix switch
         {
-            "pool_level_" => "pool_cancel",
-            "gen_level_"  => "gen_cancel",
+            "pool_level_"  => "pool_cancel",
+            "gen_level_"   => "gen_cancel",
+            "sgen_level_"  => "sgen_cancel",
             _ => "quiz_cancel"
         };
 
@@ -121,8 +123,7 @@ public static class Keyboards
         {
             InlineKeyboardButton.WithCallbackData("5",  "gen_count_5"),
             InlineKeyboardButton.WithCallbackData("10", "gen_count_10"),
-            InlineKeyboardButton.WithCallbackData("20", "gen_count_20"),
-            InlineKeyboardButton.WithCallbackData("30", "gen_count_30")
+            InlineKeyboardButton.WithCallbackData("20", "gen_count_20")
         },
         new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back", "gen_start") }
     });
@@ -150,8 +151,7 @@ public static class Keyboards
         {
             InlineKeyboardButton.WithCallbackData("5",  "pool_count_5"),
             InlineKeyboardButton.WithCallbackData("10", "pool_count_10"),
-            InlineKeyboardButton.WithCallbackData("20", "pool_count_20"),
-            InlineKeyboardButton.WithCallbackData("30", "pool_count_30")
+            InlineKeyboardButton.WithCallbackData("20", "pool_count_20")
         },
         new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back", "pool_start") }
     });
@@ -177,9 +177,9 @@ public static class Keyboards
     public static InlineKeyboardMarkup WordModeSelection() => new(new[]
     {
         new[] { InlineKeyboardButton.WithCallbackData("🏷️ By topic",    "wmode_topic") },
+        new[] { InlineKeyboardButton.WithCallbackData("🔤 By level",    "wmode_level") },
         new[] { InlineKeyboardButton.WithCallbackData("📦 By chunks",   "wmode_chunks") },
         new[] { InlineKeyboardButton.WithCallbackData("💬 By message",  "wmode_messages") },
-        new[] { InlineKeyboardButton.WithCallbackData("📋 All",         "wmode_all") },
         new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back",        "back_to_menu") }
     });
 
@@ -284,10 +284,96 @@ public static class Keyboards
             .Append(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back", "menu_my_words") })
             .ToArray());
 
+    public static InlineKeyboardMarkup StudentAddWordsChoice() => new(new[]
+    {
+        new[] { InlineKeyboardButton.WithCallbackData("✍️ Type Words",        "stype_words") },
+        new[] { InlineKeyboardButton.WithCallbackData("🤖 Generate by Level", "sgen_start") },
+        new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back",              "back_to_menu") }
+    });
+
+    public static InlineKeyboardMarkup SGenCountButtons() => new(new[]
+    {
+        new[]
+        {
+            InlineKeyboardButton.WithCallbackData("5",  "sgen_count_5"),
+            InlineKeyboardButton.WithCallbackData("10", "sgen_count_10"),
+            InlineKeyboardButton.WithCallbackData("20", "sgen_count_20")
+        },
+        new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back", "sgen_start") }
+    });
+
+    public static InlineKeyboardMarkup SGenTopicPromptButtons() => new(new[]
+    {
+        new[] { InlineKeyboardButton.WithCallbackData("⏭ Skip topic", "sgen_topic_skip") },
+        new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back",       "sgen_start") }
+    });
+
+    public static InlineKeyboardMarkup SGenPreviewButtons() => new(new[]
+    {
+        new[]
+        {
+            InlineKeyboardButton.WithCallbackData("✅ Save",         "sgen_confirm"),
+            InlineKeyboardButton.WithCallbackData("🔄 Regenerate",  "sgen_retry"),
+            InlineKeyboardButton.WithCallbackData("⬅️ Back",         "sgen_start")
+        },
+        new[] { InlineKeyboardButton.WithCallbackData("✂️ Remove Words", "sgen_remove") }
+    });
+
     public static InlineKeyboardMarkup PoolEmptyState() => new(new[]
     {
         new[] { InlineKeyboardButton.WithCallbackData("🔙 Change level", "pool_start") },
         new[] { InlineKeyboardButton.WithCallbackData("❌ Cancel",        "pool_cancel") }
+    });
+
+    public static InlineKeyboardMarkup CefrLevelBrowseButtons() => new(
+        WordFormatter.CefrLevels
+            .Select(level => InlineKeyboardButton.WithCallbackData(level, $"wlevel_{level}"))
+            .ToArray()
+            .Chunk(4)
+            .Select(row => row)
+            .Append(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back", "back_to_menu") })
+            .ToArray());
+
+    public static InlineKeyboardMarkup TopicSelectionButtons(List<string> topics) => new(
+        topics
+            .Select((t, i) => InlineKeyboardButton.WithCallbackData(
+                string.IsNullOrEmpty(t) ? "(no topic)" : t, $"wtopic_{i}"))
+            .ToArray()
+            .Chunk(2)
+            .Select(row => row)
+            .Append(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back", "back_to_menu") })
+            .ToArray());
+
+    public static InlineKeyboardMarkup DeleteWordsMode() => new(new[]
+    {
+        new[] { InlineKeyboardButton.WithCallbackData("🔤 By Level",    "delwords_level") },
+        new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back",        "back_to_menu") }
+    });
+
+    public static InlineKeyboardMarkup DeleteWordsByLevelButtons() => new(
+        WordFormatter.CefrLevels
+            .Select(level => InlineKeyboardButton.WithCallbackData(level, $"delwords_lvl_{level}"))
+            .ToArray()
+            .Chunk(4)
+            .Select(row => row)
+            .Append(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back", "menu_delete_words") })
+            .ToArray());
+
+    public static InlineKeyboardMarkup DeleteWordsActionButtons(int count) => new(new[]
+    {
+        new[] { InlineKeyboardButton.WithCallbackData($"🗑 Delete all {count}",      "delwords_confirm") },
+        new[] { InlineKeyboardButton.WithCallbackData("✂️ Choose words to DELETE",   "delwords_pick_delete") },
+        new[] { InlineKeyboardButton.WithCallbackData("✅ Choose words to KEEP",     "delwords_pick_keep") },
+        new[] { InlineKeyboardButton.WithCallbackData("❌ Cancel",                    "back_to_menu") }
+    });
+
+    public static InlineKeyboardMarkup ConfirmDeleteWords(int count, string description) => new(new[]
+    {
+        new[]
+        {
+            InlineKeyboardButton.WithCallbackData($"✅ Delete {count} words", "delwords_confirm"),
+            InlineKeyboardButton.WithCallbackData("❌ Cancel", "back_to_menu")
+        }
     });
 
     public static InlineKeyboardMarkup SingleAction(string text, string callbackData) => new(new[]

@@ -96,8 +96,8 @@ public sealed class TeacherHandler(
                 ResetState(userId);
                 await ShowStudentSelectionAsync(userId, chatId, "send", ct);
                 return;
-            case "menu_search":
-                await ShowSearchStudentSelectionAsync(userId, chatId, ct);
+            case "menu_delete_words":
+                await ShowDeleteWordsStudentSelectionAsync(userId, chatId, ct);
                 return;
         }
 
@@ -155,6 +155,18 @@ public sealed class TeacherHandler(
             return;
         }
 
+        if (data.StartsWith("wtopic_"))
+        {
+            await HandleTopicSelectedAsync(userId, chatId, data, ct);
+            return;
+        }
+
+        if (data.StartsWith("wlevel_"))
+        {
+            await HandleLevelBrowseSelectedAsync(userId, chatId, data["wlevel_".Length..], ct);
+            return;
+        }
+
         if (data.StartsWith("remove_student_"))
         {
             await HandleRemoveStudentAsync(chatId, data, ct);
@@ -164,6 +176,51 @@ public sealed class TeacherHandler(
         if (data.StartsWith("confirm_remove_"))
         {
             await HandleConfirmRemoveAsync(userId, chatId, data, ct);
+        }
+
+        if (data.StartsWith("delwords_student_"))
+        {
+            await HandleDeleteWordsStudentSelectedAsync(userId, chatId, data, ct);
+            return;
+        }
+
+        if (data == "delwords_level")
+        {
+            await Bot.SendMessage(chatId, "🔤 Select the CEFR level:", replyMarkup: Keyboards.DeleteWordsByLevelButtons(), cancellationToken: ct);
+            return;
+        }
+
+        if (data.StartsWith("delwords_lvl_"))
+        {
+            await HandleDeleteByLevelPreviewAsync(userId, chatId, data["delwords_lvl_".Length..], ct);
+            return;
+        }
+
+        if (data == "delwords_confirm")
+        {
+            await HandleDeleteConfirmAsync(userId, chatId, ct);
+            return;
+        }
+
+        if (data == "delwords_pick_delete")
+        {
+            MutateState(userId, s => { s.State = UserState.AwaitingWordDeleteInput; s.DeleteMode = "selected"; });
+            await Bot.SendMessage(chatId,
+                "✂️ Type the *numbers* of the words you want to *DELETE* (e.g. `1,3,5`):",
+                parseMode: ParseMode.Markdown,
+                replyMarkup: Keyboards.BackButton("back_to_menu"),
+                cancellationToken: ct);
+            return;
+        }
+
+        if (data == "delwords_pick_keep")
+        {
+            MutateState(userId, s => { s.State = UserState.AwaitingWordDeleteInput; s.DeleteMode = "keep"; });
+            await Bot.SendMessage(chatId,
+                "✅ Type the *numbers* of the words you want to *KEEP* (e.g. `1,3,5`). All others will be deleted:",
+                parseMode: ParseMode.Markdown,
+                replyMarkup: Keyboards.BackButton("back_to_menu"),
+                cancellationToken: ct);
         }
     }
 
@@ -742,6 +799,14 @@ public sealed class TeacherHandler(
         }
 
         var mode = data["wmode_".Length..];
+
+        if (mode == "level")
+        {
+            await Bot.SendMessage(chatId, "🔤 Select a CEFR level to browse:",
+                replyMarkup: Keyboards.CefrLevelBrowseButtons(), cancellationToken: ct);
+            return;
+        }
+
         var words = await Db.GetWordsForBrowsingAsync(userId, state.BrowsingStudentId.Value, state.BrowsingFilter ?? "both");
         if (words.Count == 0)
         {
@@ -750,17 +815,99 @@ public sealed class TeacherHandler(
             return;
         }
 
+        if (mode == "topic")
+        {
+            var topics = words
+                .Select(w => w.Topic ?? "")
+                .Distinct()
+                .OrderBy(t => t)
+                .ToList();
+
+            if (topics.Count == 0)
+            {
+                await Bot.SendMessage(chatId, "ℹ️ No topics found for these words.", cancellationToken: ct);
+                await SendMenuAsync(chatId, "Teacher", ct);
+                return;
+            }
+
+            MutateState(userId, s =>
+            {
+                s.BrowsingWords = words;
+                s.CachedTopics = topics;
+                s.BrowsingMode = "topic_pick";
+            });
+
+            await Bot.SendMessage(chatId, "🏷️ Select a topic:", replyMarkup: Keyboards.TopicSelectionButtons(topics), cancellationToken: ct);
+            return;
+        }
+
+        // "chunks" or "messages"
         state.BrowsingMode = mode;
         state.BrowsingWords = words;
         state.BrowsingOffset = 0;
         state.BrowsingGroupIdx = 0;
-        state.BrowsingGroups = mode switch
-        {
-            "topic" => GroupByTopic(words),
-            "messages" => GroupByBatch(words),
-            _ => new List<List<Word>>()
-        };
+        state.BrowsingGroups = mode == "messages" ? GroupByBatch(words) : new List<List<Word>>();
         SetState(userId, state);
+
+        await SendBrowsingPageAsync(userId, chatId, ct);
+    }
+
+    private async Task HandleTopicSelectedAsync(long userId, long chatId, string data, CancellationToken ct)
+    {
+        if (!int.TryParse(data["wtopic_".Length..], out var idx))
+        {
+            await GoMenuAsync(userId, chatId, ct);
+            return;
+        }
+
+        var state = GetState(userId);
+        if (idx < 0 || idx >= state.CachedTopics.Count || state.BrowsingWords.Count == 0)
+        {
+            await GoMenuAsync(userId, chatId, ct);
+            return;
+        }
+
+        var topic = state.CachedTopics[idx];
+        var filtered = state.BrowsingWords.Where(w => (w.Topic ?? "") == topic).ToList();
+
+        var label = string.IsNullOrEmpty(topic) ? "(no topic)" : topic;
+        MutateState(userId, s =>
+        {
+            s.BrowsingMode = "chunks";
+            s.BrowsingWords = filtered;
+            s.BrowsingOffset = 0;
+        });
+
+        await SendBrowsingPageAsync(userId, chatId, ct);
+    }
+
+    private async Task HandleLevelBrowseSelectedAsync(long userId, long chatId, string level, CancellationToken ct)
+    {
+        var state = GetState(userId);
+        if (state.BrowsingStudentId is null)
+        {
+            await GoMenuAsync(userId, chatId, ct);
+            return;
+        }
+
+        var words = await Db.GetWordsForBrowsingAsync(userId, state.BrowsingStudentId.Value, state.BrowsingFilter ?? "both");
+        var filtered = words.Where(w => w.EnglishLevel == level).ToList();
+
+        if (filtered.Count == 0)
+        {
+            await Bot.SendMessage(chatId, $"ℹ️ No *{level}* words found.",
+                parseMode: ParseMode.Markdown,
+                replyMarkup: Keyboards.BackButton("back_to_menu"),
+                cancellationToken: ct);
+            return;
+        }
+
+        MutateState(userId, s =>
+        {
+            s.BrowsingMode = "chunks";
+            s.BrowsingWords = filtered;
+            s.BrowsingOffset = 0;
+        });
 
         await SendBrowsingPageAsync(userId, chatId, ct);
     }
@@ -821,14 +968,9 @@ public sealed class TeacherHandler(
             hasPrev = offset > 0;
             header = $"📦 Words {offset + 1}–{offset + page.Count} of {state.BrowsingWords.Count}";
         }
-        else if (state.BrowsingMode == "all")
-        {
-            await SendAllWordsAsync(chatId, state.BrowsingWords, ct);
-            await SendMenuAsync(chatId, "Teacher", ct);
-            return;
-        }
         else
         {
+            // "messages" mode — groups by batch
             var groups = state.BrowsingGroups;
             var index = state.BrowsingGroupIdx;
             if (index >= groups.Count)
@@ -841,9 +983,7 @@ public sealed class TeacherHandler(
             page = groups[index];
             hasMore = index + 1 < groups.Count;
             hasPrev = index > 0;
-            header = state.BrowsingMode == "topic"
-                ? $"🏷️ Topic: *{WordFormatter.EscapeMarkdown(page[0].Topic ?? "No topic")}* ({page.Count} words) — group {index + 1}/{groups.Count}"
-                : $"💬 Message {index + 1}/{groups.Count} — {page[0].CreatedAt:dd MMM yyyy HH:mm} ({page.Count} words)";
+            header = $"💬 Message {index + 1}/{groups.Count} — {page[0].CreatedAt:dd MMM yyyy HH:mm} ({page.Count} words)";
         }
 
         var body = string.Join("\n\n", page.Select(WordFormatter.FormatWordLine));
@@ -907,13 +1047,6 @@ public sealed class TeacherHandler(
         await SendMenuAsync(chatId, "Teacher", ct);
     }
 
-    private static List<List<Word>> GroupByTopic(List<Word> words) =>
-        words
-            .GroupBy(word => word.Topic ?? string.Empty)
-            .OrderBy(group => group.Key)
-            .Select(group => group.ToList())
-            .ToList();
-
     private static List<List<Word>> GroupByBatch(List<Word> words) =>
         words
             .GroupBy(word => word.BatchId ?? Guid.Empty)
@@ -958,5 +1091,189 @@ public sealed class TeacherHandler(
             parseMode: ParseMode.Markdown,
             replyMarkup: Keyboards.BackButton("back_to_menu"),
             cancellationToken: ct);
+    }
+
+    // ── Delete Words from Student Vocabulary ───────────────────────────────
+
+    private async Task ShowDeleteWordsStudentSelectionAsync(long teacherId, long chatId, CancellationToken ct)
+    {
+        var students = await Db.GetStudentsForTeacherAsync(teacherId);
+        if (students.Count == 0)
+        {
+            await Bot.SendMessage(chatId, "You have no students yet. Use *Add Student* first.", parseMode: ParseMode.Markdown, cancellationToken: ct);
+            return;
+        }
+
+        await Bot.SendMessage(
+            chatId,
+            "🗂 *Delete Words* — choose a student:",
+            parseMode: ParseMode.Markdown,
+            replyMarkup: Keyboards.StudentList(students, "delwords_student_"),
+            cancellationToken: ct);
+    }
+
+    private async Task HandleDeleteWordsStudentSelectedAsync(long userId, long chatId, string data, CancellationToken ct)
+    {
+        if (!long.TryParse(data["delwords_student_".Length..], out var studentId))
+        {
+            await GoMenuAsync(userId, chatId, ct);
+            return;
+        }
+        var student = await Db.GetUserAsync(studentId);
+
+        MutateState(userId, s => s.DeleteStudentId = studentId);
+
+        await Bot.SendMessage(
+            chatId,
+            $"🗂 Delete words for *{WordFormatter.EscapeMarkdown(student?.DisplayName ?? studentId.ToString())}*\n\nHow do you want to find words to delete?",
+            parseMode: ParseMode.Markdown,
+            replyMarkup: Keyboards.DeleteWordsMode(),
+            cancellationToken: ct);
+    }
+
+    private async Task HandleDeleteByLevelPreviewAsync(long userId, long chatId, string level, CancellationToken ct)
+    {
+        var state = GetState(userId);
+        if (state.DeleteStudentId is null)
+        {
+            await GoMenuAsync(userId, chatId, ct);
+            return;
+        }
+
+        var words = await Db.GetWordsByLevelAsync(state.DeleteStudentId.Value, level, top: 1000);
+        var studentName = (await Db.GetUserAsync(state.DeleteStudentId.Value))?.DisplayName ?? state.DeleteStudentId.ToString()!;
+
+        if (words.Count == 0)
+        {
+            await Bot.SendMessage(
+                chatId,
+                $"ℹ️ No *{level}* words found for *{WordFormatter.EscapeMarkdown(studentName)}*.",
+                parseMode: ParseMode.Markdown,
+                replyMarkup: Keyboards.BackButton("menu_delete_words"),
+                cancellationToken: ct);
+            return;
+        }
+
+        MutateState(userId, s => { s.DeleteWords = words; s.DeleteLevel = level; s.DeleteMode = null; });
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"📋 *{level}* words for *{WordFormatter.EscapeMarkdown(studentName)}* — {words.Count} total:\n");
+        for (var i = 0; i < words.Count; i++)
+            sb.AppendLine($"{i + 1}\\. {WordFormatter.EscapeMarkdown(words[i].OriginalWord)} — {WordFormatter.EscapeMarkdown(words[i].Translation)}");
+
+        // Telegram message limit is 4096 chars; split if needed
+        var text = sb.ToString();
+        if (text.Length > 3900)
+        {
+            // Send word list as plain text first, then action prompt
+            var listSb = new StringBuilder();
+            listSb.AppendLine($"📋 *{level}* words for *{WordFormatter.EscapeMarkdown(studentName)}* — {words.Count} total:\n");
+            for (var i = 0; i < words.Count; i++)
+                listSb.AppendLine($"{i + 1}. {words[i].OriginalWord} — {words[i].Translation}");
+
+            foreach (var chunk in ChunkText(listSb.ToString(), 3900))
+                await Bot.SendMessage(chatId, chunk, parseMode: ParseMode.Markdown, cancellationToken: ct);
+
+            await Bot.SendMessage(chatId, "What do you want to do?",
+                replyMarkup: Keyboards.DeleteWordsActionButtons(words.Count), cancellationToken: ct);
+        }
+        else
+        {
+            await Bot.SendMessage(chatId, text, parseMode: ParseMode.Markdown,
+                replyMarkup: Keyboards.DeleteWordsActionButtons(words.Count), cancellationToken: ct);
+        }
+    }
+
+    private async Task HandleDeleteConfirmAsync(long userId, long chatId, CancellationToken ct)
+    {
+        var state = GetState(userId);
+        if (state.DeleteStudentId is null || state.DeleteWords.Count == 0)
+        {
+            await GoMenuAsync(userId, chatId, ct);
+            return;
+        }
+
+        var studentName = (await Db.GetUserAsync(state.DeleteStudentId.Value))?.DisplayName ?? state.DeleteStudentId.ToString()!;
+        var ids = state.DeleteWords.Select(w => w.Id);
+        await Db.DeleteWordsByIdsAsync(ids);
+        var count = state.DeleteWords.Count;
+        var level = state.DeleteLevel ?? "";
+        ResetState(userId);
+
+        await Bot.SendMessage(
+            chatId,
+            $"✅ Deleted *{count}* {(string.IsNullOrEmpty(level) ? "" : $"*{level}* ")}word(s) from *{WordFormatter.EscapeMarkdown(studentName)}*'s vocabulary.",
+            parseMode: ParseMode.Markdown,
+            cancellationToken: ct);
+
+        await SendMenuAsync(chatId, "Teacher", ct);
+    }
+
+    public async Task HandleWordDeleteInputAsync(long userId, long chatId, string input, CancellationToken ct)
+    {
+        var state = GetState(userId);
+        if (state.DeleteStudentId is null || state.DeleteWords.Count == 0)
+        {
+            ResetState(userId);
+            await GoMenuAsync(userId, chatId, ct);
+            return;
+        }
+
+        var indices = input.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(s => int.TryParse(s, out var n) ? n : -1)
+            .Where(n => n >= 1 && n <= state.DeleteWords.Count)
+            .Select(n => n - 1)
+            .Distinct()
+            .ToHashSet();
+
+        if (indices.Count == 0)
+        {
+            await Bot.SendMessage(chatId, "⚠️ No valid numbers found. Please try again:", replyMarkup: Keyboards.BackButton("back_to_menu"), cancellationToken: ct);
+            return;
+        }
+
+        List<Word> toDelete;
+        if (state.DeleteMode == "keep")
+        {
+            // Delete everything NOT in the keep set
+            toDelete = state.DeleteWords.Where((_, i) => !indices.Contains(i)).ToList();
+        }
+        else
+        {
+            // Delete selected words
+            toDelete = state.DeleteWords.Where((_, i) => indices.Contains(i)).ToList();
+        }
+
+        if (toDelete.Count == 0)
+        {
+            await Bot.SendMessage(chatId, "ℹ️ Nothing to delete based on your selection.", replyMarkup: Keyboards.BackButton("back_to_menu"), cancellationToken: ct);
+            return;
+        }
+
+        var studentName = (await Db.GetUserAsync(state.DeleteStudentId.Value))?.DisplayName ?? state.DeleteStudentId.ToString()!;
+        await Db.DeleteWordsByIdsAsync(toDelete.Select(w => w.Id));
+        var level = state.DeleteLevel ?? "";
+        ResetState(userId);
+
+        await Bot.SendMessage(
+            chatId,
+            $"✅ Deleted *{toDelete.Count}* {(string.IsNullOrEmpty(level) ? "" : $"*{level}* ")}word(s) from *{WordFormatter.EscapeMarkdown(studentName)}*'s vocabulary.",
+            parseMode: ParseMode.Markdown,
+            cancellationToken: ct);
+
+        await SendMenuAsync(chatId, "Teacher", ct);
+    }
+
+    public async Task HandleWordDeleteSearchInputAsync(long userId, long chatId, string query, CancellationToken ct)
+    {
+        // Search-based deletion removed; redirect to menu
+        ResetState(userId);
+        await GoMenuAsync(userId, chatId, ct);
+    }
+
+    private static IEnumerable<string> ChunkText(string text, int maxLen)
+    {
+        for (var i = 0; i < text.Length; i += maxLen)
+            yield return text.Substring(i, Math.Min(maxLen, text.Length - i));
     }
 }

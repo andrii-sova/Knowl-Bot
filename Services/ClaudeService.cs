@@ -8,7 +8,7 @@ namespace VocabifyBot.Services;
 public sealed class ClaudeService : IOpenAiService
 {
     private const string ApiUrl = "https://api.anthropic.com/v1/messages";
-    private const string Model = "claude-opus-4-7";
+    private const string Model = "claude-haiku-4-5";
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
 
@@ -23,20 +23,22 @@ public sealed class ClaudeService : IOpenAiService
     }
 
     private const string TranslationPrompt = @"You are an English-to-Ukrainian dictionary assistant for language learners.
-Translate English words or phrases into Ukrainian following EXACTLY this format for each entry (one entry per line):
+Translate English words or phrases into Ukrainian following EXACTLY this format (one entry per line):
 
-[LEVEL] phrase — Ukrainian translation, synonyms; також: additional meaning [Ukrainian Cyrillic pronunciation] (Example sentence — Ukrainian translation)
+[LEVEL] english word (english synonym) — primary Ukrainian translation; також: secondary Ukrainian translation [IPA transcription] (English example sentence — Ukrainian translation)
 
-Rules:
-- Each entry must be on a SINGLE line — no line breaks inside an entry
-- Start every line with the CEFR level in square brackets: [A0], [A1], [A2], [B1], [B2], [C1], or [C2]
-- Pronunciation MUST be in square brackets [] using ONLY Ukrainian Cyrillic letters (e.g. [пут ю оф], [гет ап], [брейк даун])
-- Include 1-3 short example sentences with translations in the same parentheses
-- List all common Ukrainian meanings separated by commas; use 'також:' for secondary meanings
-- Output ONLY the translated entries, nothing else
+STRICT rules:
+- ONE entry per line, no line breaks inside an entry
+- CEFR level in square brackets: [A1], [A2], [B1], [B2], [C1], or [C2]
+- Exactly ONE English synonym in round brackets after the word
+- Dash — separates English from Ukrainian
+- Exactly ONE primary Ukrainian translation; use 'також:' for one secondary meaning
+- Pronunciation in square brackets using standard IPA transcription with stress mark ˈ (e.g. [dɪˈmɪnɪʃ], [ˌʌndəˈstænd], [ˈhæpɪ])
+- Exactly ONE example sentence with its Ukrainian translation in round brackets at the end
+- Output ONLY the entries, nothing else
 
-Example output:
-[B2] put you off — відбити бажання, знеохотити, відвернути (від чогось); також: відкласти [пут ю оф] (The smell put me off my food — Запах відбив мені апетит; Don't let his comments put you off — Не дозволяй його коментарям знеохотити тебе)";
+Example:
+[B2] diminish (decrease) — зменшувати; також: применшувати [dɪˈmɪnɪʃ] (Her enthusiasm did not diminish over time — Її ентузіазм не зменшився з часом)";
 
     public async Task<string> TranslateWordsAsync(string words)
     {
@@ -70,16 +72,21 @@ Example output:
             $@"You are an English vocabulary generator for Ukrainian learners.
 Generate exactly {count} English words or phrases at CEFR level {level}.{topicClause}
 
-For each entry output a SINGLE line in EXACTLY this format:
-[{level}] english phrase — Ukrainian translation, synonyms; також: secondary meaning [Ukrainian Cyrillic pronunciation] (Example sentence — Ukrainian translation)
+Each entry MUST follow EXACTLY this format (one entry per line):
+[{level}] english word (english synonym) — primary Ukrainian translation; також: secondary Ukrainian translation [IPA transcription] (English example sentence — Ukrainian translation)
 
-Rules:
-- One entry per line, no blank lines between entries
-- Every line must start with [{level}]
-- Pronunciation MUST be in square brackets [] using ONLY Ukrainian Cyrillic letters
-- Include 1–2 short example sentences with Ukrainian translation in parentheses
+STRICT rules:
+- ONE entry per line, no blank lines, no line breaks inside an entry
+- Every line starts with [{level}]
+- Exactly ONE English synonym in round brackets after the word
+- Exactly ONE primary Ukrainian translation; use 'також:' for one secondary meaning
+- Pronunciation in square brackets using standard IPA transcription with stress mark ˈ (e.g. [dɪˈmɪnɪʃ], [ˌʌndəˈstænd], [ˈhæpɪ])
+- Exactly ONE example sentence with its Ukrainian translation in round brackets at the end
 - Choose natural, useful everyday words a learner at {level} would need{excludeClause}
-- Output ONLY the word entries, no headers, numbers or extra text";
+- Output ONLY the entries, no headers, numbers or extra text
+
+Example:
+[B2] diminish (decrease) — зменшувати; також: применшувати [dɪˈmɪnɪʃ] (Her enthusiasm did not diminish over time — Її ентузіазм не зменшився з часом)";
 
         return await SendAsync(systemPrompt, $"Generate {count} {level} words.");
     }

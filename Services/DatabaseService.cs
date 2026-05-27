@@ -1,508 +1,497 @@
-using VocabifyBot.Data;
+using MongoDB.Driver;
 using VocabifyBot.Interfaces;
 using VocabifyBot.Models;
-using Microsoft.EntityFrameworkCore;
 
 namespace VocabifyBot.Services;
 
-public sealed class DatabaseService(DbContextOptions<EnglishBotDbContext> options) : IDatabaseService
+public sealed class DatabaseService : IDatabaseService
 {
-    private EnglishBotDbContext Ctx() => new(options);
+    private readonly IMongoCollection<User>              _users;
+    private readonly IMongoCollection<Word>              _words;
+    private readonly IMongoCollection<WordStat>          _wordStats;
+    private readonly IMongoCollection<TeacherStudent>    _teacherStudents;
+    private readonly IMongoCollection<PendingInvitation> _pendingInvitations;
+
+    public DatabaseService(IMongoDatabase db)
+    {
+        _users              = db.GetCollection<User>("users");
+        _words              = db.GetCollection<Word>("words");
+        _wordStats          = db.GetCollection<WordStat>("word_stats");
+        _teacherStudents    = db.GetCollection<TeacherStudent>("teacher_students");
+        _pendingInvitations = db.GetCollection<PendingInvitation>("pending_invitations");
+    }
 
     public async Task InitializeAsync()
     {
-        await using var ctx = Ctx();
-        await ctx.Database.EnsureCreatedAsync();
+        await _words.Indexes.CreateManyAsync(new[]
+        {
+            new CreateIndexModel<Word>(Builders<Word>.IndexKeys.Ascending(w => w.ForStudentId)),
+            new CreateIndexModel<Word>(Builders<Word>.IndexKeys.Ascending(w => w.AddedByUserId)),
+            new CreateIndexModel<Word>(Builders<Word>.IndexKeys.Combine(
+                Builders<Word>.IndexKeys.Ascending(w => w.ForStudentId),
+                Builders<Word>.IndexKeys.Ascending(w => w.EnglishLevel)))
+        });
 
-        // Idempotent migration: add IsActivated column if upgrading from an older schema
-        await ctx.Database.ExecuteSqlRawAsync("""
-            IF NOT EXISTS (
-                SELECT 1 FROM sys.columns
-                WHERE object_id = OBJECT_ID(N'Users') AND name = N'IsActivated'
-            )
-            ALTER TABLE Users ADD IsActivated BIT NOT NULL DEFAULT 0
-            """);
+        await _wordStats.Indexes.CreateManyAsync(new[]
+        {
+            new CreateIndexModel<WordStat>(Builders<WordStat>.IndexKeys.Ascending(s => s.StudentId)),
+            new CreateIndexModel<WordStat>(
+                Builders<WordStat>.IndexKeys.Combine(
+                    Builders<WordStat>.IndexKeys.Ascending(s => s.WordId),
+                    Builders<WordStat>.IndexKeys.Ascending(s => s.StudentId)),
+                new CreateIndexOptions { Unique = true })
+        });
+
+        await _teacherStudents.Indexes.CreateOneAsync(new CreateIndexModel<TeacherStudent>(
+            Builders<TeacherStudent>.IndexKeys.Combine(
+                Builders<TeacherStudent>.IndexKeys.Ascending(ts => ts.TeacherId),
+                Builders<TeacherStudent>.IndexKeys.Ascending(ts => ts.StudentId)),
+            new CreateIndexOptions { Unique = true }));
+
+        await _pendingInvitations.Indexes.CreateOneAsync(new CreateIndexModel<PendingInvitation>(
+            Builders<PendingInvitation>.IndexKeys.Combine(
+                Builders<PendingInvitation>.IndexKeys.Ascending(p => p.TeacherId),
+                Builders<PendingInvitation>.IndexKeys.Ascending(p => p.StudentUsername)),
+            new CreateIndexOptions { Unique = true }));
     }
-
-    // ── Users ────────────────────────────────────────────────────────────────
 
     public async Task<User?> GetUserAsync(long telegramId)
     {
-        await using var ctx = Ctx();
-        return await ctx.Users.FindAsync(telegramId);
+        return await _users.Find(u => u.TelegramId == telegramId).FirstOrDefaultAsync();
     }
 
     public async Task<User?> GetUserByUsernameAsync(string username)
     {
-        await using var ctx = Ctx();
-        var clean = username.TrimStart('@').Trim().ToLower();
-        return await ctx.Users
-            .FirstOrDefaultAsync(u => u.Username.ToLower() == clean);
+        var clean = username.TrimStart('@').Trim().ToLowerInvariant();
+        return await _users.Find(u => u.Username == clean).FirstOrDefaultAsync();
     }
 
     public async Task UpsertUserAsync(User user)
     {
-        await using var ctx = Ctx();
-        var existing = await ctx.Users.FindAsync(user.TelegramId);
+        var normalizedUsername = (user.Username ?? string.Empty).Trim().TrimStart('@').ToLowerInvariant();
+        var existing = await _users.Find(u => u.TelegramId == user.TelegramId).FirstOrDefaultAsync();
         if (existing is null)
         {
-            user.CreatedAt = DateTime.UtcNow;
-            ctx.Users.Add(user);
+            user.Username = normalizedUsername;
+            user.CreatedAt = user.CreatedAt == default ? DateTime.UtcNow : user.CreatedAt;
+            await _users.InsertOneAsync(user);
+            return;
         }
-        else
-        {
-            existing.Username  = user.Username;
-            existing.FirstName = user.FirstName;
-        }
-        await ctx.SaveChangesAsync();
+
+        var update = Builders<User>.Update
+            .Set(u => u.Username, normalizedUsername)
+            .Set(u => u.FirstName, user.FirstName);
+
+        await _users.UpdateOneAsync(u => u.TelegramId == user.TelegramId, update);
     }
 
     public async Task UpdateDisplayNameAsync(long userId, string? name)
     {
-        await using var ctx = Ctx();
-        var user = await ctx.Users.FindAsync(userId);
-        if (user is null) return;
-        user.DisplayNameOverride = string.IsNullOrWhiteSpace(name) ? null : name.Trim();
-        await ctx.SaveChangesAsync();
+        var clean = string.IsNullOrWhiteSpace(name) ? null : name.Trim();
+        await _users.UpdateOneAsync(
+            u => u.TelegramId == userId,
+            Builders<User>.Update.Set(u => u.DisplayNameOverride, clean));
     }
-
-    // ── Teacher ↔ Student links ──────────────────────────────────────────────
 
     public async Task<bool> IsStudentLinkedToAnyTeacherAsync(long studentId)
     {
-        await using var ctx = Ctx();
-        return await ctx.TeacherStudents.AnyAsync(ts => ts.StudentId == studentId);
+        return await _teacherStudents.Find(ts => ts.StudentId == studentId).AnyAsync();
     }
 
     public async Task LinkTeacherStudentAsync(long teacherId, long studentId)
     {
-        await using var ctx = Ctx();
-        var exists = await ctx.TeacherStudents
-            .AnyAsync(ts => ts.TeacherId == teacherId && ts.StudentId == studentId);
-        if (!exists)
+        try
         {
-            ctx.TeacherStudents.Add(new TeacherStudent { TeacherId = teacherId, StudentId = studentId });
+            await _teacherStudents.InsertOneAsync(new TeacherStudent { TeacherId = teacherId, StudentId = studentId });
+        }
+        catch (MongoWriteException ex) when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey)
+        {
         }
 
-        // Mark the student as activated so they retain access even if later removed
-        var student = await ctx.Users.FindAsync(studentId);
-        if (student is not null && !student.IsActivated)
-        {
-            student.IsActivated = true;
-        }
-
-        await ctx.SaveChangesAsync();
+        await _users.UpdateOneAsync(
+            u => u.TelegramId == studentId,
+            Builders<User>.Update.Set(u => u.IsActivated, true));
     }
 
     public async Task UnlinkTeacherStudentAsync(long teacherId, long studentId)
     {
-        await using var ctx = Ctx();
-        var link = await ctx.TeacherStudents
-            .FirstOrDefaultAsync(ts => ts.TeacherId == teacherId && ts.StudentId == studentId);
-        if (link is not null)
-        {
-            ctx.TeacherStudents.Remove(link);
-            await ctx.SaveChangesAsync();
-        }
+        await _teacherStudents.DeleteOneAsync(ts => ts.TeacherId == teacherId && ts.StudentId == studentId);
     }
 
     public async Task<List<User>> GetStudentsForTeacherAsync(long teacherId)
     {
-        await using var ctx = Ctx();
-        return await ctx.TeacherStudents
-            .Where(ts => ts.TeacherId == teacherId)
-            .Select(ts => ts.Student)
-            .ToListAsync();
-    }
+        var links = await _teacherStudents.Find(ts => ts.TeacherId == teacherId).ToListAsync();
+        if (links.Count == 0)
+        {
+            return [];
+        }
 
-    // ── Pending invitations ───────────────────────────────────────────────────
+        var studentIds = links.Select(link => link.StudentId).ToList();
+        var students = await _users.Find(Builders<User>.Filter.In(u => u.TelegramId, studentIds)).ToListAsync();
+        var studentMap = students.ToDictionary(student => student.TelegramId);
+        return studentIds.Select(id => studentMap.GetValueOrDefault(id)).OfType<User>().ToList();
+    }
 
     public async Task AddPendingInvitationAsync(long teacherId, string studentUsername)
     {
-        await using var ctx = Ctx();
-        var clean = studentUsername.TrimStart('@').Trim().ToLower();
-        var exists = await ctx.PendingInvitations
-            .AnyAsync(p => p.TeacherId == teacherId && p.StudentUsername == clean);
-        if (!exists)
+        var clean = studentUsername.TrimStart('@').Trim().ToLowerInvariant();
+        try
         {
-            ctx.PendingInvitations.Add(new PendingInvitation
+            await _pendingInvitations.InsertOneAsync(new PendingInvitation
             {
-                TeacherId       = teacherId,
+                TeacherId = teacherId,
                 StudentUsername = clean,
-                CreatedAt       = DateTime.UtcNow
+                CreatedAt = DateTime.UtcNow
             });
-            await ctx.SaveChangesAsync();
+        }
+        catch (MongoWriteException ex) when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey)
+        {
         }
     }
 
     public async Task<List<PendingInvitation>> GetPendingInvitationsForTeacherAsync(long teacherId)
     {
-        await using var ctx = Ctx();
-        return await ctx.PendingInvitations
-            .Where(p => p.TeacherId == teacherId)
-            .OrderBy(p => p.StudentUsername)
+        return await _pendingInvitations
+            .Find(p => p.TeacherId == teacherId)
+            .SortBy(p => p.StudentUsername)
             .ToListAsync();
     }
 
-    /// <summary>
-    /// When a student activates their account, link them to any teacher who has a pending invitation for their username.
-    /// </summary>
     public async Task ClaimPendingInvitationsAsync(long studentId, string username)
     {
-        await using var ctx = Ctx();
-        var clean = username.TrimStart('@').Trim().ToLower();
-        var pending = await ctx.PendingInvitations
-            .Where(p => p.StudentUsername == clean)
-            .ToListAsync();
-
-        foreach (var inv in pending)
+        var clean = username.TrimStart('@').Trim().ToLowerInvariant();
+        var pending = await _pendingInvitations.Find(p => p.StudentUsername == clean).ToListAsync();
+        if (pending.Count == 0)
         {
-            var alreadyLinked = await ctx.TeacherStudents
-                .AnyAsync(ts => ts.TeacherId == inv.TeacherId && ts.StudentId == studentId);
-            if (!alreadyLinked)
-                ctx.TeacherStudents.Add(new TeacherStudent
+            return;
+        }
+
+        foreach (var invitation in pending)
+        {
+            try
+            {
+                await _teacherStudents.InsertOneAsync(new TeacherStudent
                 {
-                    TeacherId = inv.TeacherId,
+                    TeacherId = invitation.TeacherId,
                     StudentId = studentId
                 });
+            }
+            catch (MongoWriteException ex) when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey)
+            {
+            }
         }
 
-        if (pending.Count > 0)
-        {
-            // Mark the student as activated so they retain access even if later removed
-            var student = await ctx.Users.FindAsync(studentId);
-            if (student is not null)
-                student.IsActivated = true;
-        }
+        await _users.UpdateOneAsync(
+            u => u.TelegramId == studentId,
+            Builders<User>.Update.Set(u => u.IsActivated, true));
 
-        ctx.PendingInvitations.RemoveRange(pending);
-        await ctx.SaveChangesAsync();
+        await _pendingInvitations.DeleteManyAsync(p => p.StudentUsername == clean);
     }
 
     public async Task RemovePendingInvitationAsync(long teacherId, string studentUsername)
     {
-        await using var ctx = Ctx();
-        var clean = studentUsername.TrimStart('@').Trim().ToLower();
-        var inv = await ctx.PendingInvitations
-            .FirstOrDefaultAsync(p => p.TeacherId == teacherId && p.StudentUsername == clean);
-        if (inv is not null)
-        {
-            ctx.PendingInvitations.Remove(inv);
-            await ctx.SaveChangesAsync();
-        }
+        var clean = studentUsername.TrimStart('@').Trim().ToLowerInvariant();
+        await _pendingInvitations.DeleteOneAsync(p => p.TeacherId == teacherId && p.StudentUsername == clean);
     }
-
-
 
     public async Task SaveWordsAsync(IEnumerable<Word> words)
     {
-        await using var ctx = Ctx();
-        var batch = DateTime.UtcNow;
-        foreach (var w in words)
+        var list = words.ToList();
+        if (list.Count == 0)
         {
-            w.CreatedAt = batch;
-            ctx.Words.Add(w);
+            return;
         }
-        await ctx.SaveChangesAsync();
+
+        var batchTime = DateTime.UtcNow;
+        foreach (var word in list)
+        {
+            word.CreatedAt = batchTime;
+        }
+
+        await _words.InsertManyAsync(list);
     }
 
-    /// <summary>Loads words for a student filtered by who added them.</summary>
-    /// <param name="filter">"teacher" | "student" | "both"</param>
     public async Task<List<Word>> GetWordsForBrowsingAsync(long teacherId, long studentId, string filter)
     {
-        await using var ctx = Ctx();
-        var query = ctx.Words.Where(w => w.ForStudentId == studentId);
+        var fb = Builders<Word>.Filter;
+        var query = fb.Eq(w => w.ForStudentId, studentId);
         query = filter switch
         {
-            "teacher" => query.Where(w => w.AddedByUserId == teacherId),
-            "student" => query.Where(w => w.AddedByUserId == studentId),
-            _         => query
+            "teacher" => fb.And(query, fb.Eq(w => w.AddedByUserId, teacherId)),
+            "student" => fb.And(query, fb.Eq(w => w.AddedByUserId, studentId)),
+            _ => query
         };
-        return await query.OrderBy(w => w.EnglishLevel ?? "Z").ThenBy(w => w.CreatedAt).ToListAsync();
+
+        var words = await _words.Find(query).ToListAsync();
+        return words
+            .OrderBy(w => w.EnglishLevel ?? "Z")
+            .ThenBy(w => w.CreatedAt)
+            .ToList();
     }
 
-    /// <summary>Words in a student's vocabulary (sent by teacher or added personally).</summary>
-    public async Task<List<Word>> GetWordsForStudentAsync(long studentId, int top = 50)
+    public async Task<List<Word>> GetWordsForStudentAsync(long studentId)
     {
-        await using var ctx = Ctx();
-        return await ctx.Words
-            .Where(w => w.ForStudentId == studentId)
+        var words = await _words.Find(w => w.ForStudentId == studentId).ToListAsync();
+        return words
             .OrderBy(w => w.EnglishLevel ?? "Z")
             .ThenByDescending(w => w.CreatedAt)
-            .Take(top)
-            .ToListAsync();
+            .ToList();
     }
 
-    /// <summary>
-    /// Returns up to <paramref name="count"/> random words from the teacher's word pool
-    /// that have NOT yet been assigned to <paramref name="studentId"/>.
-    /// Optionally filtered by CEFR level.
-    /// </summary>
     public async Task<List<Word>> GetPoolWordsAsync(long teacherId, long studentId, string? level, int count)
     {
-        await using var ctx = Ctx();
-
-        // IDs of words already sent to this student by this teacher
-        var alreadySentOriginals = await ctx.Words
-            .Where(w => w.AddedByUserId == teacherId && w.ForStudentId == studentId)
-            .Select(w => w.OriginalWord)
+        var alreadySentOriginals = await _words.Find(w => w.AddedByUserId == teacherId && w.ForStudentId == studentId)
+            .Project(w => w.OriginalWord)
             .ToListAsync();
 
-        var query = ctx.Words
-            .Where(w => w.AddedByUserId == teacherId
-                     && w.ForStudentId  != studentId
-                     && !alreadySentOriginals.Contains(w.OriginalWord));
+        var fb = Builders<Word>.Filter;
+        var filter = fb.And(
+            fb.Eq(w => w.AddedByUserId, teacherId),
+            fb.Ne(w => w.ForStudentId, studentId),
+            fb.Nin(w => w.OriginalWord, alreadySentOriginals));
 
         if (!string.IsNullOrEmpty(level))
-            query = query.Where(w => w.EnglishLevel == level);
+        {
+            filter = fb.And(filter, fb.Eq(w => w.EnglishLevel, level));
+        }
 
-        // Load candidates into memory and shuffle for randomness
-        var candidates = await query
-            .Select(w => new { w.OriginalWord, w.Translation, w.EnglishLevel, w.Topic })
-            .Distinct()
+        var candidates = await _words.Find(filter)
+            .Project(w => new Word
+            {
+                OriginalWord = w.OriginalWord,
+                Translation = w.Translation,
+                EnglishLevel = w.EnglishLevel,
+                Topic = w.Topic
+            })
             .ToListAsync();
 
-        // Deduplicate by OriginalWord (keep first occurrence after shuffle)
-        var rng = new Random();
-        var shuffled = candidates.OrderBy(_ => rng.Next()).ToList();
+        var shuffled = candidates.OrderBy(_ => Random.Shared.Next()).ToList();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var result = new List<Word>();
-        foreach (var c in shuffled)
+
+        foreach (var candidate in shuffled)
         {
-            if (!seen.Add(c.OriginalWord)) continue;
-            result.Add(new Word
+            if (!seen.Add(candidate.OriginalWord))
             {
-                OriginalWord = c.OriginalWord,
-                Translation  = c.Translation,
-                EnglishLevel = c.EnglishLevel,
-                Topic        = c.Topic
-            });
-            if (result.Count >= count) break;
+                continue;
+            }
+
+            result.Add(candidate);
+            if (result.Count >= count)
+            {
+                break;
+            }
         }
+
         return result;
     }
 
     public async Task<List<Word>> GetWordsSentToStudentAsync(long teacherId, long studentId, int top = 50)
     {
-        await using var ctx = Ctx();
-        return await ctx.Words
-            .Where(w => w.AddedByUserId == teacherId && w.ForStudentId == studentId)
+        var words = await _words
+            .Find(w => w.AddedByUserId == teacherId && w.ForStudentId == studentId)
+            .ToListAsync();
+
+        return words
             .OrderBy(w => w.EnglishLevel ?? "Z")
             .ThenByDescending(w => w.CreatedAt)
             .Take(top)
-            .ToListAsync();
+            .ToList();
     }
 
-    // ── Quiz ─────────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Returns up to <paramref name="count"/> words for a quiz, using smart selection:
-    /// prioritises words in the "learning zone" (0.2–0.8 accuracy after ≥5 attempts),
-    /// deprioritises highly-mastered (≥0.8) and highly-struggling (≤0.2) ones.
-    /// </summary>
-    public async Task<List<Word>> GetWordsForQuizAsync(
-        long studentId, string? level, string? topic, int count)
+    public async Task<List<Word>> GetWordsForQuizAsync(long studentId, string? level, string? topic, int count)
     {
-        await using var ctx = Ctx();
+        var fb = Builders<Word>.Filter;
+        var filter = fb.Eq(w => w.ForStudentId, studentId);
+        if (!string.IsNullOrEmpty(level))
+        {
+            filter = fb.And(filter, fb.Eq(w => w.EnglishLevel, level));
+        }
+        if (!string.IsNullOrEmpty(topic))
+        {
+            filter = fb.And(filter, fb.Eq(w => w.Topic, topic));
+        }
 
-        var query = ctx.Words.Where(w => w.ForStudentId == studentId);
-        if (!string.IsNullOrEmpty(level)) query = query.Where(w => w.EnglishLevel == level);
-        if (!string.IsNullOrEmpty(topic)) query = query.Where(w => w.Topic == topic);
-
-        var raw = await query.ToListAsync();
-
-        // Deduplicate — keep the most recent entry for each original word
+        var raw = await _words.Find(filter).ToListAsync();
         var unique = raw
-            .GroupBy(w => w.OriginalWord.ToLower())
-            .Select(g => g.OrderByDescending(w => w.CreatedAt).First())
+            .GroupBy(w => w.OriginalWord.ToLowerInvariant())
+            .Select(group => group.OrderByDescending(w => w.CreatedAt).First())
             .ToList();
 
-        if (unique.Count == 0) return unique;
+        if (unique.Count == 0)
+        {
+            return unique;
+        }
 
-        // Load accuracy stats
-        var ids   = unique.Select(w => w.Id).ToList();
-        var stats = await ctx.WordStats
-            .Where(s => s.StudentId == studentId && ids.Contains(s.WordId))
-            .ToDictionaryAsync(s => s.WordId);
+        var ids = unique.Select(w => w.Id).ToList();
+        var stats = await _wordStats
+            .Find(s => s.StudentId == studentId && ids.Contains(s.WordId))
+            .ToListAsync();
+        var statMap = stats.ToDictionary(s => s.WordId);
 
-        var rng          = new Random();
-        var normal       = new List<Word>();
+        var normal = new List<Word>();
         var deprioritized = new List<Word>();
 
-        foreach (var w in unique)
+        foreach (var word in unique)
         {
-            if (stats.TryGetValue(w.Id, out var stat))
+            if (statMap.TryGetValue(word.Id, out var stat))
             {
                 var total = stat.CorrectCount + stat.WrongCount;
                 if (total >= 5)
                 {
-                    var acc = (double)stat.CorrectCount / total;
-                    if (acc >= 0.8 || acc <= 0.2) { deprioritized.Add(w); continue; }
+                    var accuracy = (double)stat.CorrectCount / total;
+                    if (accuracy >= 0.8 || accuracy <= 0.2)
+                    {
+                        deprioritized.Add(word);
+                        continue;
+                    }
                 }
             }
-            normal.Add(w);
+
+            normal.Add(word);
         }
 
-        // Shuffle both pools
-        normal        = normal.OrderBy(_ => rng.Next()).ToList();
-        deprioritized = deprioritized.OrderBy(_ => rng.Next()).ToList();
-
-        // Fill from normal first, pad with deprioritized only if needed
-        var result = normal.Take(count).ToList();
+        var result = normal.OrderBy(_ => Random.Shared.Next()).Take(count).ToList();
         if (result.Count < count)
-            result.AddRange(deprioritized.Take(count - result.Count));
+        {
+            result.AddRange(deprioritized.OrderBy(_ => Random.Shared.Next()).Take(count - result.Count));
+        }
 
         return result;
     }
 
-    /// <summary>Upserts a quiz answer stat for a specific word and student.</summary>
-    public async Task RecordQuizAnswerAsync(long studentId, int wordId, bool isCorrect)
+    public async Task RecordQuizAnswerAsync(long studentId, string wordId, bool isCorrect)
     {
-        await using var ctx = Ctx();
-        var stat = await ctx.WordStats
-            .FirstOrDefaultAsync(s => s.StudentId == studentId && s.WordId == wordId);
-
-        if (stat is null)
+        var existing = await _wordStats.Find(s => s.WordId == wordId && s.StudentId == studentId).FirstOrDefaultAsync();
+        if (existing is null)
         {
-            ctx.WordStats.Add(new WordStat
+            try
             {
-                WordId       = wordId,
-                StudentId    = studentId,
-                CorrectCount = isCorrect ? 1 : 0,
-                WrongCount   = isCorrect ? 0 : 1,
-                LastSeenAt   = DateTime.UtcNow
-            });
+                await _wordStats.InsertOneAsync(new WordStat
+                {
+                    WordId = wordId,
+                    StudentId = studentId,
+                    CorrectCount = isCorrect ? 1 : 0,
+                    WrongCount = isCorrect ? 0 : 1,
+                    LastSeenAt = DateTime.UtcNow
+                });
+            }
+            catch (MongoWriteException ex) when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey)
+            {
+            }
+            return;
         }
-        else
-        {
-            if (isCorrect) stat.CorrectCount++;
-            else           stat.WrongCount++;
-            stat.LastSeenAt = DateTime.UtcNow;
-        }
-        await ctx.SaveChangesAsync();
+
+        var update = Builders<WordStat>.Update.Set(s => s.LastSeenAt, DateTime.UtcNow);
+        update = isCorrect
+            ? update.Inc(s => s.CorrectCount, 1)
+            : update.Inc(s => s.WrongCount, 1);
+
+        await _wordStats.UpdateOneAsync(s => s.Id == existing.Id, update);
     }
 
-    /// <summary>Returns words ordered by most errors first, filtered to those with at least one wrong answer.</summary>
     public async Task<List<Word>> GetWordsForMistakesAsync(long studentId, int count)
     {
-        await using var ctx = Ctx();
-
-        // Fetch stats ordered by wrong count descending
-        var topStats = await ctx.WordStats
-            .Where(s => s.StudentId == studentId && s.WrongCount > 0)
-            .OrderByDescending(s => s.WrongCount)
-            .Take(count)
+        var topStats = await _wordStats
+            .Find(s => s.StudentId == studentId && s.WrongCount > 0)
+            .SortByDescending(s => s.WrongCount)
+            .Limit(count)
             .ToListAsync();
 
-        if (topStats.Count == 0) return new List<Word>();
+        if (topStats.Count == 0)
+        {
+            return [];
+        }
 
-        var wordIds = topStats.Select(s => s.WordId).ToHashSet();
-        var words   = await ctx.Words.Where(w => wordIds.Contains(w.Id)).ToListAsync();
+        var wordIds = topStats.Select(s => s.WordId).ToList();
+        var words = await _words.Find(Builders<Word>.Filter.In(w => w.Id, wordIds)).ToListAsync();
+        var wordMap = words.ToDictionary(w => w.Id);
 
-        // Preserve the error-count order with O(1) lookup
-        var wordDict = words.ToDictionary(w => w.Id);
         return topStats
-            .Select(s => wordDict.GetValueOrDefault(s.WordId))
+            .Select(stat => wordMap.GetValueOrDefault(stat.WordId))
             .OfType<Word>()
             .ToList();
     }
 
-    /// <summary>Halves the wrong count for a word after a correct answer in Mistakes mode.</summary>
-    public async Task ReduceWrongCountAsync(long studentId, int wordId)
+    public async Task ReduceWrongCountAsync(long studentId, string wordId)
     {
-        await using var ctx = Ctx();
-        var stat = await ctx.WordStats
-            .FirstOrDefaultAsync(s => s.StudentId == studentId && s.WordId == wordId);
-        if (stat is null) return;
+        var stat = await _wordStats.Find(s => s.WordId == wordId && s.StudentId == studentId).FirstOrDefaultAsync();
+        if (stat is null)
+        {
+            return;
+        }
 
-        stat.WrongCount = Math.Max(0, stat.WrongCount / 2);
-        await ctx.SaveChangesAsync();
+        await _wordStats.UpdateOneAsync(
+            s => s.Id == stat.Id,
+            Builders<WordStat>.Update.Set(s => s.WrongCount, Math.Max(0, stat.WrongCount / 2)));
     }
 
     public async Task<List<string>> GetTopicsForStudentAsync(long studentId)
     {
-        await using var ctx = Ctx();
-        return await ctx.Words
-            .Where(w => w.ForStudentId == studentId && w.Topic != null)
-            .Select(w => w.Topic!)
-            .Distinct()
-            .OrderBy(t => t)
+        var topics = await _words.Find(w => w.ForStudentId == studentId && w.Topic != null)
+            .Project(w => w.Topic!)
             .ToListAsync();
+
+        return topics.Distinct().OrderBy(topic => topic).ToList();
     }
 
-    /// <summary>Words for a student filtered by topic.</summary>
-    public async Task<List<Word>> GetWordsByTopicAsync(long studentId, string topic, int top = 50)
+    public async Task<List<Word>> GetWordsByTopicAsync(long studentId, string topic)
     {
-        await using var ctx = Ctx();
-        return await ctx.Words
-            .Where(w => w.ForStudentId == studentId && w.Topic == topic)
+        var words = await _words.Find(w => w.ForStudentId == studentId && w.Topic == topic).ToListAsync();
+        return words
             .OrderBy(w => w.EnglishLevel ?? "Z")
             .ThenByDescending(w => w.CreatedAt)
-            .Take(top)
-            .ToListAsync();
+            .ToList();
     }
 
-    /// <summary>Words for a student filtered by CEFR level.</summary>
     public async Task<List<Word>> GetWordsByLevelAsync(long studentId, string level, int top = 50)
     {
-        await using var ctx = Ctx();
-        return await ctx.Words
-            .Where(w => w.ForStudentId == studentId && w.EnglishLevel == level)
-            .OrderBy(w => w.CreatedAt)
-            .Take(top)
+        var words = await _words.Find(w => w.ForStudentId == studentId && w.EnglishLevel == level)
+            .SortBy(w => w.CreatedAt)
+            .Limit(top)
             .ToListAsync();
+
+        return words;
     }
 
-    /// <summary>Returns every original English word the student already has (no limit) — used to exclude duplicates from AI generation.</summary>
     public async Task<List<string>> GetAllWordOriginalsAsync(long studentId)
     {
-        await using var ctx = Ctx();
-        return await ctx.Words
-            .Where(w => w.ForStudentId == studentId)
-            .Select(w => w.OriginalWord)
-            .Distinct()
+        var originals = await _words.Find(w => w.ForStudentId == studentId)
+            .Project(w => w.OriginalWord)
             .ToListAsync();
+
+        return originals.Distinct().ToList();
     }
 
-    /// <summary>
-    /// Fuzzy word search using a two-pass strategy:
-    ///   1. SQL-side pre-filter with LIKE for substring matches (fast index scan).
-    ///   2. In-memory Levenshtein on remaining words with an adaptive distance
-    ///      threshold that scales with word length so short words require closer
-    ///      matches than long ones.
-    /// Results are ordered: exact substring hits first, then fuzzy hits by distance,
-    /// both groups sorted by CEFR level.
-    /// </summary>
     public async Task<List<Word>> SearchWordsAsync(long studentId, string query, int maxResults = 15)
     {
-        await using var ctx = Ctx();
-        var q = query.Trim().ToLower();
-        if (string.IsNullOrEmpty(q)) return [];
+        var q = query.Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(q))
+        {
+            return [];
+        }
 
-        // Pass 1 — SQL: substring match (uses index seek on varchar column).
-        var substringHits = await ctx.Words
-            .Where(w => w.ForStudentId == studentId &&
-                        (w.OriginalWord.ToLower().Contains(q) || w.Translation.ToLower().Contains(q)))
+        var all = await _words.Find(w => w.ForStudentId == studentId).ToListAsync();
+        var substringHits = all
+            .Where(w => w.OriginalWord.Contains(q, StringComparison.OrdinalIgnoreCase)
+                     || w.Translation.Contains(q, StringComparison.OrdinalIgnoreCase))
             .OrderBy(w => w.EnglishLevel ?? "Z")
             .Take(maxResults)
-            .ToListAsync();
+            .ToList();
 
         if (substringHits.Count >= maxResults)
+        {
             return substringHits;
+        }
 
-        // Pass 2 — in-memory Levenshtein on words NOT already in the substring results.
         var substringIds = substringHits.Select(w => w.Id).ToHashSet();
-
-        var candidates = await ctx.Words
-            .Where(w => w.ForStudentId == studentId && !substringIds.Contains(w.Id))
-            .ToListAsync();
+        var candidates = all.Where(w => !substringIds.Contains(w.Id)).ToList();
 
         var fuzzyHits = candidates
             .Select(w =>
             {
-                var orig = w.OriginalWord.ToLower();
-                var dist = Levenshtein(q, orig);
-                return (Word: w, Distance: dist);
+                var distance = Levenshtein(q, w.OriginalWord.ToLowerInvariant());
+                return (Word: w, Distance: distance);
             })
             .Where(x => x.Distance <= AdaptiveThreshold(q.Length, x.Word.OriginalWord.Length))
             .OrderBy(x => x.Distance)
@@ -514,28 +503,56 @@ public sealed class DatabaseService(DbContextOptions<EnglishBotDbContext> option
         return [.. substringHits, .. fuzzyHits];
     }
 
-    /// <summary>
-    /// Maximum allowed Levenshtein distance based on the lengths of query and target word.
-    /// Short words get a tight threshold; longer words allow proportionally more edits.
-    /// </summary>
-    private static int AdaptiveThreshold(int queryLen, int wordLen)
+    public async Task DeleteWordsByLevelAsync(long studentId, string level)
     {
-        var maxLen = Math.Max(queryLen, wordLen);
-        return maxLen switch
+        var ids = await _words.Find(w => w.ForStudentId == studentId && w.EnglishLevel == level)
+            .Project(w => w.Id)
+            .ToListAsync();
+
+        if (ids.Count == 0)
         {
-            <= 3  => 0,   // "cat" must match exactly
-            <= 5  => 1,   // "house" allows 1 typo
-            <= 8  => 2,   // "morning" allows 2 typos
-            <= 12 => 3,   // "comfortable" allows 3 typos
-            _     => (int)(maxLen * 0.25) // 25% of longer word length
+            return;
+        }
+
+        await _words.DeleteManyAsync(w => w.ForStudentId == studentId && w.EnglishLevel == level);
+        await _wordStats.DeleteManyAsync(Builders<WordStat>.Filter.In(s => s.WordId, ids));
+    }
+
+    public async Task DeleteWordsByIdsAsync(IEnumerable<string> wordIds)
+    {
+        var ids = wordIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct().ToList();
+        if (ids.Count == 0)
+        {
+            return;
+        }
+
+        await _words.DeleteManyAsync(Builders<Word>.Filter.In(w => w.Id, ids));
+        await _wordStats.DeleteManyAsync(Builders<WordStat>.Filter.In(s => s.WordId, ids));
+    }
+
+    private static int AdaptiveThreshold(int queryLength, int wordLength)
+    {
+        var maxLength = Math.Max(queryLength, wordLength);
+        return maxLength switch
+        {
+            <= 3 => 0,
+            <= 5 => 1,
+            <= 8 => 2,
+            <= 12 => 3,
+            _ => (int)(maxLength * 0.25)
         };
     }
 
-    /// <summary>Standard iterative Levenshtein distance (O(n*m) time, O(n) space).</summary>
     private static int Levenshtein(string a, string b)
     {
-        if (a.Length == 0) return b.Length;
-        if (b.Length == 0) return a.Length;
+        if (a.Length == 0)
+        {
+            return b.Length;
+        }
+        if (b.Length == 0)
+        {
+            return a.Length;
+        }
 
         var prev = Enumerable.Range(0, b.Length + 1).ToArray();
         var curr = new int[b.Length + 1];
@@ -548,8 +565,10 @@ public sealed class DatabaseService(DbContextOptions<EnglishBotDbContext> option
                 var cost = a[i - 1] == b[j - 1] ? 0 : 1;
                 curr[j] = Math.Min(Math.Min(prev[j] + 1, curr[j - 1] + 1), prev[j - 1] + cost);
             }
+
             Array.Copy(curr, prev, curr.Length);
         }
+
         return prev[b.Length];
     }
 }
