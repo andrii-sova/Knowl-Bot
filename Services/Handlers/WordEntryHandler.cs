@@ -57,8 +57,8 @@ public sealed class WordEntryHandler(
             PendingForStudentId = forStudentId
         });
 
-        var preview = string.Join("\n\n", entries.Select(WordFormatter.FormatPendingLine));
-        await Bot.SendMessage(chatId, preview, parseMode: ParseMode.Markdown, cancellationToken: ct);
+        var lines = entries.Select(WordFormatter.FormatPendingLine).ToList();
+        await SendWordListAsync(chatId, lines, ct);
         await Bot.SendMessage(chatId, "🏷️ Add a topic to these words?", replyMarkup: Keyboards.TopicChoice(), cancellationToken: ct);
     }
 
@@ -143,16 +143,13 @@ public sealed class WordEntryHandler(
         if (state.PendingAddedByUserId != state.PendingForStudentId)
         {
             var teacher = await Db.GetUserAsync(state.PendingAddedByUserId.Value);
-            var topicLine = topic is not null ? $"🏷️ Topic: {topic}\n\n" : string.Empty;
-            var wordLines = string.Join("\n\n", state.PendingWords.Select(WordFormatter.FormatPendingLine));
+            var topicLine = topic is not null ? $"\n🏷️ Topic: {topic}" : string.Empty;
+            var header = $"📚 New vocabulary from {teacher?.DisplayName ?? "your teacher"}:{topicLine}";
+            var wordLines = state.PendingWords.Select(WordFormatter.FormatPendingLine).ToList();
 
             try
             {
-                await Bot.SendMessage(
-                    state.PendingForStudentId.Value,
-                    $"📚 New vocabulary from {teacher?.DisplayName ?? "your teacher"}:\n\n{topicLine}{wordLines}",
-                    parseMode: ParseMode.Markdown,
-                    cancellationToken: ct);
+                await SendWordListAsync(state.PendingForStudentId.Value, wordLines, ct, header: header);
             }
             catch
             {

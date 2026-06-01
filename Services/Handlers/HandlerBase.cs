@@ -55,6 +55,35 @@ public abstract class HandlerBase(ITelegramBotClient bot, IDatabaseService db, C
         await SendMenuAsync(chatId, userId, user?.Role ?? "Student", ct);
     }
 
+    /// <summary>
+    /// Sends a list of formatted word lines in chunks of <paramref name="chunkSize"/>.
+    /// The optional <paramref name="header"/> is prepended to the first message only.
+    /// The optional <paramref name="finalMarkup"/> is attached to the last message only.
+    /// </summary>
+    protected async Task SendWordListAsync(
+        long chatId,
+        IReadOnlyList<string> lines,
+        CancellationToken ct,
+        string? header = null,
+        Telegram.Bot.Types.ReplyMarkups.ReplyMarkup? finalMarkup = null,
+        int chunkSize = 10)
+    {
+        var chunks = lines.Chunk(chunkSize).ToList();
+        for (var i = 0; i < chunks.Count; i++)
+        {
+            var isFirst = i == 0;
+            var isLast  = i == chunks.Count - 1;
+            var body    = string.Join("\n\n", chunks[i]);
+            var text    = isFirst && header is not null ? $"{header}\n\n{body}" : body;
+            await Bot.SendMessage(
+                chatId,
+                text,
+                parseMode: Telegram.Bot.Types.Enums.ParseMode.Markdown,
+                replyMarkup: isLast ? finalMarkup : null,
+                cancellationToken: ct);
+        }
+    }
+
     private static InlineKeyboardMarkup GetMenuMarkup(string role) =>
         role == "Teacher" ? Keyboards.TeacherMenu() : Keyboards.StudentMenu();
 }

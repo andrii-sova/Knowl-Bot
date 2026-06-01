@@ -432,14 +432,10 @@ public sealed class TeacherHandler(
 
         var student = await Db.GetUserAsync(state.SelectedStudentId.Value);
         var levelLabel = state.PoolLevel is not null ? $" *[{state.PoolLevel}]*" : string.Empty;
-        var preview = string.Join("\n\n", words.Select(WordFormatter.FormatWordLine));
+        var header = $"🎯 Preview — {words.Count} words{levelLabel} for *{WordFormatter.EscapeMarkdown(student?.DisplayName ?? string.Empty)}*:";
 
-        await Bot.SendMessage(
-            chatId,
-            $"🎯 Preview — {words.Count} words{levelLabel} for *{WordFormatter.EscapeMarkdown(student?.DisplayName ?? string.Empty)}*:\n\n{preview}",
-            parseMode: ParseMode.Markdown,
-            replyMarkup: Keyboards.PoolPreviewButtons(),
-            cancellationToken: ct);
+        await SendWordListAsync(chatId, words.Select(WordFormatter.FormatWordLine).ToList(), ct,
+            header: header, finalMarkup: Keyboards.PoolPreviewButtons());
     }
 
     private async Task ConfirmPoolPreviewAsync(long userId, long chatId, CancellationToken ct)
@@ -466,12 +462,8 @@ public sealed class TeacherHandler(
 
         try
         {
-            var body = string.Join("\n\n", state.PoolPreview.Select(WordFormatter.FormatWordLine));
-            await Bot.SendMessage(
-                state.SelectedStudentId.Value,
-                $"📚 New vocabulary from {WordFormatter.EscapeMarkdown(teacher?.DisplayName ?? "your teacher")}{WordFormatter.EscapeMarkdown(levelLabel)}:\n\n{body}",
-                parseMode: ParseMode.Markdown,
-                cancellationToken: ct);
+            var notifyHeader = $"📚 New vocabulary from {WordFormatter.EscapeMarkdown(teacher?.DisplayName ?? "your teacher")}{WordFormatter.EscapeMarkdown(levelLabel)}:";
+            await SendWordListAsync(state.SelectedStudentId.Value, state.PoolPreview.Select(WordFormatter.FormatWordLine).ToList(), ct, header: notifyHeader);
         }
         catch
         {
@@ -590,14 +582,8 @@ public sealed class TeacherHandler(
             var student = await Db.GetUserAsync(state.SelectedStudentId.Value);
             var topicNote = state.GenTopic is not null ? $" · 🏷️ _{WordFormatter.EscapeMarkdown(state.GenTopic)}_" : string.Empty;
             var header = $"🤖 *{preview.Count} {state.GenLevel} words* for *{WordFormatter.EscapeMarkdown(student?.DisplayName ?? string.Empty)}*{topicNote}:";
-            var body = string.Join("\n\n", preview.Select(WordFormatter.FormatPendingLine));
-
-            await Bot.SendMessage(
-                chatId,
-                $"{header}\n\n{body}",
-                parseMode: ParseMode.Markdown,
-                replyMarkup: Keyboards.GenPreviewButtons(),
-                cancellationToken: ct);
+            await SendWordListAsync(chatId, preview.Select(WordFormatter.FormatPendingLine).ToList(), ct,
+                header: header, finalMarkup: Keyboards.GenPreviewButtons());
         }
         finally
         {
@@ -686,14 +672,9 @@ public sealed class TeacherHandler(
         var student = await Db.GetUserAsync(state.SelectedStudentId!.Value);
         var topicNote = state.GenTopic is not null ? $" · 🏷️ _{WordFormatter.EscapeMarkdown(state.GenTopic)}_" : string.Empty;
         var header = $"🤖 *{state.GenPreview.Count} {state.GenLevel} words* for *{WordFormatter.EscapeMarkdown(student?.DisplayName ?? string.Empty)}*{topicNote}:";
-        var body = string.Join("\n\n", state.GenPreview.Select(WordFormatter.FormatPendingLine));
 
-        await Bot.SendMessage(
-            chatId,
-            $"{header}\n\n{body}",
-            parseMode: ParseMode.Markdown,
-            replyMarkup: Keyboards.GenPreviewButtons(),
-            cancellationToken: ct);
+        await SendWordListAsync(chatId, state.GenPreview.Select(WordFormatter.FormatPendingLine).ToList(), ct,
+            header: header, finalMarkup: Keyboards.GenPreviewButtons());
     }
 
     private async Task ConfirmGenPreviewAsync(long userId, long chatId, CancellationToken ct)
@@ -723,13 +704,9 @@ public sealed class TeacherHandler(
 
         try
         {
-            var body = string.Join("\n\n", state.GenPreview.Select(WordFormatter.FormatPendingLine));
             var topicNote = state.GenTopic is not null ? $" · {WordFormatter.EscapeMarkdown(state.GenTopic)}" : string.Empty;
-            await Bot.SendMessage(
-                state.SelectedStudentId.Value,
-                $"📚 New *{state.GenLevel}* vocabulary from {WordFormatter.EscapeMarkdown(teacher?.DisplayName ?? "your teacher")}{topicNote}:\n\n{body}",
-                parseMode: ParseMode.Markdown,
-                cancellationToken: ct);
+            var notifyHeader = $"📚 New *{state.GenLevel}* vocabulary from {WordFormatter.EscapeMarkdown(teacher?.DisplayName ?? "your teacher")}{topicNote}:";
+            await SendWordListAsync(state.SelectedStudentId.Value, state.GenPreview.Select(WordFormatter.FormatPendingLine).ToList(), ct, header: notifyHeader);
         }
         catch
         {
