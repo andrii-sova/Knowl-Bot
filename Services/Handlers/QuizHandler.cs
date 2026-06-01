@@ -248,11 +248,10 @@ public sealed class QuizHandler(ITelegramBotClient bot, IDatabaseService db, Con
         var direction = state.QuizDirection ?? "eu";
         var question = WordFormatter.QuizQuestion(correct, direction);
         var options = BuildOptions(correct, state.QuizWords);
-        var levelTag = !string.IsNullOrWhiteSpace(correct.EnglishLevel) ? $" *[{correct.EnglishLevel}]*" : string.Empty;
 
         var message = await Bot.SendMessage(
             chatId,
-            $"🧩 *Question {state.QuizIndex + 1}/{state.QuizWords.Count}*{levelTag}\n\n*{WordFormatter.EscapeMarkdown(question)}*\n\nChoose the correct translation:",
+            $"🧩 *Question {state.QuizIndex + 1}/{state.QuizWords.Count}*\n\n*{WordFormatter.EscapeMarkdown(question)}*\n\nChoose the correct translation:",
             parseMode: ParseMode.Markdown,
             replyMarkup: Keyboards.QuizAnswerGrid(state.QuizIndex, options, direction),
             cancellationToken: ct);
