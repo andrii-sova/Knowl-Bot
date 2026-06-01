@@ -18,8 +18,9 @@ public interface IDatabaseService
     Task ClaimPendingInvitationsAsync(long studentId, string username);
     Task RemovePendingInvitationAsync(long teacherId, string studentUsername);
     Task DeleteWordsByLevelAsync(long studentId, string level);
-    Task DeleteWordsByIdsAsync(IEnumerable<string> wordIds);
-    Task SaveWordsAsync(IEnumerable<Word> words);
+    Task DeleteWordsByIdsAsync(IEnumerable<string> wordIds, long studentId);
+    Task SaveWordsFromEntriesAsync(IEnumerable<PendingWordEntry> entries, long addedById, long forStudentId, string? topic, Guid batchId);
+    Task AssignPoolWordsAsync(IEnumerable<Word> poolWords, long teacherId, long studentId, Guid batchId);
     Task<List<Word>> GetWordsForBrowsingAsync(long teacherId, long studentId, string filter);
     Task<List<Word>> GetWordsForStudentAsync(long studentId);
     Task<List<Word>> GetPoolWordsAsync(long teacherId, long studentId, string? level, int count);

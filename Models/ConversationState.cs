@@ -2,9 +2,14 @@ namespace KnowlBot.Models;
 
 public sealed record PendingWordEntry
 {
-    public string Original { get; init; } = "";
-    public string Translation { get; init; } = "";
-    public string? EnglishLevel { get; init; }
+    public string  Word                    { get; init; } = "";
+    public string  CefrLevel               { get; init; } = "";
+    public string  Synonym                 { get; init; } = "";
+    public string  Transcription           { get; init; } = "";
+    public string  MostlyUsedTranslation   { get; init; } = "";
+    public string? OtherTranslation        { get; init; }
+    public string  ExampleUsage            { get; init; } = "";
+    public string  ExampleUsageTranslation { get; init; } = "";
 }
 
 public enum UserState
@@ -32,7 +37,6 @@ public sealed class ConversationState
     public List<PendingWordEntry> PendingWords { get; set; } = new();
     public long? PendingAddedByUserId { get; set; }
     public long? PendingForStudentId { get; set; }
-    public string PendingTranslationText { get; set; } = "";
 
     public string? PoolLevel { get; set; }
     public int PoolCount { get; set; }

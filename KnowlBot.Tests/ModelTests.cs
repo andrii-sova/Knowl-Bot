@@ -50,20 +50,16 @@ public class ModelTests
     {
         var word = new Word
         {
-            OriginalWord = "apple",
-            Translation = "яблуко",
-            EnglishLevel = "A1",
-            Topic = "Food",
-            ForStudentId = 100,
-            AddedByUserId = 200
+            OriginalWord          = "apple",
+            CefrLevel             = "A1",
+            MostlyUsedTranslation = "яблуко",
+            Synonym               = "fruit"
         };
 
         word.OriginalWord.Should().Be("apple");
-        word.Translation.Should().Be("яблуко");
-        word.EnglishLevel.Should().Be("A1");
-        word.Topic.Should().Be("Food");
-        word.ForStudentId.Should().Be(100);
-        word.AddedByUserId.Should().Be(200);
+        word.CefrLevel.Should().Be("A1");
+        word.MostlyUsedTranslation.Should().Be("яблуко");
+        word.Synonym.Should().Be("fruit");
     }
 
     // ── PendingWordEntry record ────────────────────────────────────────────────
@@ -71,8 +67,8 @@ public class ModelTests
     [Fact]
     public void PendingWordEntry_ValueEquality()
     {
-        var a = new PendingWordEntry { Original = "apple", Translation = "яблуко", EnglishLevel = "A1" };
-        var b = new PendingWordEntry { Original = "apple", Translation = "яблуко", EnglishLevel = "A1" };
+        var a = new PendingWordEntry { Word = "apple", MostlyUsedTranslation = "яблуко", CefrLevel = "A1" };
+        var b = new PendingWordEntry { Word = "apple", MostlyUsedTranslation = "яблуко", CefrLevel = "A1" };
 
         a.Should().Be(b);
     }
@@ -80,8 +76,8 @@ public class ModelTests
     [Fact]
     public void PendingWordEntry_DifferentValues_NotEqual()
     {
-        var a = new PendingWordEntry { Original = "apple", Translation = "яблуко" };
-        var b = new PendingWordEntry { Original = "cat", Translation = "кіт" };
+        var a = new PendingWordEntry { Word = "apple", MostlyUsedTranslation = "яблуко" };
+        var b = new PendingWordEntry { Word = "cat",   MostlyUsedTranslation = "кіт" };
 
         a.Should().NotBe(b);
     }

@@ -45,7 +45,7 @@ public class WordFormatterTests
     {
         var result = WordFormatter.Truncate("hello world", 7);
         result.Should().EndWith("…");
-        result.Length.Should().BeLessOrEqualTo(8); // 7 chars + ellipsis
+        result.Length.Should().BeLessOrEqualTo(8);
     }
 
     [Fact]
@@ -55,157 +55,115 @@ public class WordFormatterTests
         WordFormatter.Truncate(null!, 5).Should().BeNull();
     }
 
-    // ── ShortUkr ─────────────────────────────────────────────────────────────
-
-    [Fact]
-    public void ShortUkr_WithDash_ReturnsSuffix()
-    {
-        var result = WordFormatter.ShortUkr("put off — відбити бажання [пут оф]");
-        result.Should().Be("відбити бажання");
-    }
-
-    [Fact]
-    public void ShortUkr_NoDash_StripsBracketsAndParens()
-    {
-        var result = WordFormatter.ShortUkr("відбити [транскр] (коментар)");
-        result.Should().Be("відбити");
-    }
-
-    [Fact]
-    public void ShortUkr_PlainWord_ReturnsWord()
-    {
-        WordFormatter.ShortUkr("яблуко").Should().Be("яблуко");
-    }
-
     // ── QuizQuestion / QuizAnswer ────────────────────────────────────────────
 
     [Fact]
     public void QuizQuestion_EuDirection_ReturnsEnglish()
     {
-        var word = new Word { OriginalWord = "apple", Translation = "яблуко" };
+        var word = new Word { OriginalWord = "apple", MostlyUsedTranslation = "яблуко" };
         WordFormatter.QuizQuestion(word, "eu").Should().Be("apple");
     }
 
     [Fact]
     public void QuizQuestion_UeDirection_ReturnsUkrainian()
     {
-        var word = new Word { OriginalWord = "apple", Translation = "яблуко" };
+        var word = new Word { OriginalWord = "apple", MostlyUsedTranslation = "яблуко" };
         WordFormatter.QuizQuestion(word, "ue").Should().Be("яблуко");
     }
 
     [Fact]
-    public void QuizAnswer_EuDirection_ReturnsShortUkr()
+    public void QuizAnswer_EuDirection_ReturnsMostlyUsedTranslation()
     {
-        var word = new Word { OriginalWord = "apple", Translation = "яблуко" };
+        var word = new Word { OriginalWord = "apple", MostlyUsedTranslation = "яблуко" };
         WordFormatter.QuizAnswer(word, "eu").Should().Be("яблуко");
     }
 
     [Fact]
     public void QuizAnswer_UeDirection_ReturnsEnglish()
     {
-        var word = new Word { OriginalWord = "apple", Translation = "яблуко" };
+        var word = new Word { OriginalWord = "apple", MostlyUsedTranslation = "яблуко" };
         WordFormatter.QuizAnswer(word, "ue").Should().Be("apple");
     }
 
     // ── FormatWordLine ───────────────────────────────────────────────────────
 
     [Fact]
-    public void FormatWordLine_WithLevelAndTopic_IncludesBoth()
+    public void FormatWordLine_AllFields_FormatsCorrectly()
     {
         var word = new Word
         {
-            OriginalWord = "apple",
-            Translation = "яблуко",
-            EnglishLevel = "A1",
-            Topic = "Food"
+            OriginalWord            = "diminish",
+            CefrLevel               = "B2",
+            Transcription           = "dɪˈmɪnɪʃ",
+            Synonym                 = "decrease",
+            MostlyUsedTranslation   = "зменшувати",
+            OtherTranslation        = "применшувати",
+            ExampleUsage            = "Her enthusiasm did not diminish",
+            ExampleUsageTranslation = "Її ентузіазм не зменшився"
+        };
+
+        var result = WordFormatter.FormatWordLine(word);
+        result.Should().Contain("B2");
+        result.Should().Contain("diminish");
+        result.Should().Contain("dɪˈmɪnɪʃ");
+        result.Should().Contain("decrease");
+        result.Should().Contain("зменшувати");
+        result.Should().Contain("применшувати");
+        result.Should().Contain("Her enthusiasm did not diminish");
+    }
+
+    [Fact]
+    public void FormatWordLine_NoOptionalFields_SkipsThem()
+    {
+        var word = new Word
+        {
+            OriginalWord          = "apple",
+            CefrLevel             = "A1",
+            MostlyUsedTranslation = "яблуко"
         };
 
         var result = WordFormatter.FormatWordLine(word);
         result.Should().Contain("A1");
-        result.Should().Contain("Food");
+        result.Should().Contain("apple");
         result.Should().Contain("яблуко");
-    }
-
-    [Fact]
-    public void FormatWordLine_NoLevelNoTopic_ReturnsTranslationOnly()
-    {
-        var word = new Word { OriginalWord = "apple", Translation = "яблуко" };
-        WordFormatter.FormatWordLine(word).Should().Be("яблуко");
-    }
-
-    // ── BuildPendingWords ────────────────────────────────────────────────────
-
-    [Fact]
-    public void BuildPendingWords_MatchingLines_ParsesCorrectly()
-    {
-        var result = WordFormatter.BuildPendingWords(
-            "apple\ncat",
-            "[A1] яблуко\n[A2] кіт");
-
-        result.Should().HaveCount(2);
-        result[0].Original.Should().Be("apple");
-        result[0].Translation.Should().Be("яблуко");
-        result[0].EnglishLevel.Should().Be("A1");
-        result[1].Original.Should().Be("cat");
-        result[1].EnglishLevel.Should().Be("A2");
-    }
-
-    [Fact]
-    public void BuildPendingWords_NoLevelPrefix_EnglishLevelIsNull()
-    {
-        var result = WordFormatter.BuildPendingWords("apple", "яблуко");
-
-        result.Should().HaveCount(1);
-        result[0].EnglishLevel.Should().BeNull();
-        result[0].Translation.Should().Be("яблуко");
-    }
-
-    [Fact]
-    public void BuildPendingWords_MoreInputsThanTranslations_UsesOriginalAsFallback()
-    {
-        var result = WordFormatter.BuildPendingWords("apple\ncat", "яблуко");
-
-        result.Should().HaveCount(2);
-        result[1].Translation.Should().Be("cat");
-    }
-
-    // ── BuildPendingWordsFromGeneration ──────────────────────────────────────
-
-    [Fact]
-    public void BuildPendingWordsFromGeneration_ParsesLevelAndOriginal()
-    {
-        const string text = "[B2] put you off — відбити бажання [пут ю оф] (phrasal verb)";
-        var result = WordFormatter.BuildPendingWordsFromGeneration(text);
-
-        result.Should().HaveCount(1);
-        result[0].EnglishLevel.Should().Be("B2");
-        result[0].Original.Should().Be("put you off");
-        result[0].Translation.Should().Be("put you off — відбити бажання [пут ю оф] (phrasal verb)");
-    }
-
-    [Fact]
-    public void BuildPendingWordsFromGeneration_SkipsLinesWithoutPrefix()
-    {
-        const string text = "some header\n[A1] apple — яблуко";
-        var result = WordFormatter.BuildPendingWordsFromGeneration(text);
-
-        result.Should().HaveCount(1);
-        result[0].EnglishLevel.Should().Be("A1");
+        result.Should().NotContain("(");  // no synonym or example in parens
     }
 
     // ── FormatPendingLine ────────────────────────────────────────────────────
 
     [Fact]
-    public void FormatPendingLine_WithLevel_IncludesLevelPrefix()
+    public void FormatPendingLine_WithAllFields_FormatsCorrectly()
     {
-        var entry = new PendingWordEntry { Translation = "яблуко", EnglishLevel = "A1" };
-        WordFormatter.FormatPendingLine(entry).Should().Contain("A1").And.Contain("яблуко");
+        var entry = new PendingWordEntry
+        {
+            Word                    = "diminish",
+            CefrLevel               = "B2",
+            Transcription           = "dɪˈmɪnɪʃ",
+            Synonym                 = "decrease",
+            MostlyUsedTranslation   = "зменшувати",
+            OtherTranslation        = "применшувати",
+            ExampleUsage            = "Her enthusiasm did not diminish",
+            ExampleUsageTranslation = "Її ентузіазм не зменшився"
+        };
+
+        var result = WordFormatter.FormatPendingLine(entry);
+        result.Should().Contain("B2");
+        result.Should().Contain("diminish");
+        result.Should().Contain("зменшувати");
     }
 
     [Fact]
-    public void FormatPendingLine_WithoutLevel_JustTranslation()
+    public void FormatPendingLine_WithoutLevel_NoLevelPrefix()
     {
-        var entry = new PendingWordEntry { Translation = "яблуко" };
-        WordFormatter.FormatPendingLine(entry).Should().Be("яблуко");
+        var entry = new PendingWordEntry
+        {
+            Word                  = "apple",
+            MostlyUsedTranslation = "яблуко"
+        };
+
+        var result = WordFormatter.FormatPendingLine(entry);
+        result.Should().Contain("apple");
+        result.Should().Contain("яблуко");
+        result.Should().NotContain("[A");
     }
 }

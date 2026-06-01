@@ -12,11 +12,11 @@ public sealed class TeacherHandler(
     ITelegramBotClient bot,
     IDatabaseService db,
     ConversationStateManager states,
-    IOpenAiService openAi)
+    IAiService openAi)
     : HandlerBase(bot, db, states)
 {
     private const int ChunkSize = 20;
-    private IOpenAiService OpenAi { get; } = openAi;
+    private IAiService OpenAi { get; } = openAi;
 
     public async Task HandleCallbackAsync(string data, long userId, long chatId, CancellationToken ct)
     {
@@ -452,18 +452,7 @@ public sealed class TeacherHandler(
         }
 
         var batchId = Guid.NewGuid();
-        var wordsToSave = state.PoolPreview.Select(word => new Word
-        {
-            OriginalWord = word.OriginalWord,
-            Translation = word.Translation,
-            EnglishLevel = word.EnglishLevel,
-            Topic = word.Topic,
-            BatchId = batchId,
-            AddedByUserId = userId,
-            ForStudentId = state.SelectedStudentId.Value
-        });
-
-        await Db.SaveWordsAsync(wordsToSave);
+        await Db.AssignPoolWordsAsync(state.PoolPreview, userId, state.SelectedStudentId.Value, batchId);
 
         var teacher = await Db.GetUserAsync(userId);
         var student = await Db.GetUserAsync(state.SelectedStudentId.Value);
@@ -576,7 +565,7 @@ public sealed class TeacherHandler(
         {
             var existingWords = await Db.GetAllWordOriginalsAsync(state.SelectedStudentId.Value);
             var generated = await OpenAi.GenerateWordsByLevelAsync(state.GenLevel, state.GenCount, state.GenTopic, existingWords);
-            var preview = WordFormatter.BuildPendingWordsFromGeneration(generated);
+            var preview = generated;
 
             MutateState(userId, currentState =>
             {
@@ -601,11 +590,7 @@ public sealed class TeacherHandler(
             var student = await Db.GetUserAsync(state.SelectedStudentId.Value);
             var topicNote = state.GenTopic is not null ? $" · 🏷️ _{WordFormatter.EscapeMarkdown(state.GenTopic)}_" : string.Empty;
             var header = $"🤖 *{preview.Count} {state.GenLevel} words* for *{WordFormatter.EscapeMarkdown(student?.DisplayName ?? string.Empty)}*{topicNote}:";
-            var body = string.Join("\n\n", preview.Select(word =>
-            {
-                var levelTag = word.EnglishLevel is not null ? $"*[{word.EnglishLevel}]* " : string.Empty;
-                return $"{levelTag}{WordFormatter.EscapeMarkdown(word.Translation)}";
-            }));
+            var body = string.Join("\n\n", preview.Select(WordFormatter.FormatPendingLine));
 
             await Bot.SendMessage(
                 chatId,
@@ -639,8 +624,7 @@ public sealed class TeacherHandler(
 
         var numbered = string.Join("\n", state.GenPreview.Select((w, i) =>
         {
-            var level = w.EnglishLevel is not null ? $"*[{w.EnglishLevel}]* " : string.Empty;
-            return $"{i + 1}. {level}{WordFormatter.EscapeMarkdown(w.Translation)}";
+            return $"{i + 1}. {WordFormatter.FormatPendingLine(w)}";
         }));
 
         await Bot.SendMessage(
@@ -702,11 +686,7 @@ public sealed class TeacherHandler(
         var student = await Db.GetUserAsync(state.SelectedStudentId!.Value);
         var topicNote = state.GenTopic is not null ? $" · 🏷️ _{WordFormatter.EscapeMarkdown(state.GenTopic)}_" : string.Empty;
         var header = $"🤖 *{state.GenPreview.Count} {state.GenLevel} words* for *{WordFormatter.EscapeMarkdown(student?.DisplayName ?? string.Empty)}*{topicNote}:";
-        var body = string.Join("\n\n", state.GenPreview.Select(word =>
-        {
-            var levelTag = word.EnglishLevel is not null ? $"*[{word.EnglishLevel}]* " : string.Empty;
-            return $"{levelTag}{WordFormatter.EscapeMarkdown(word.Translation)}";
-        }));
+        var body = string.Join("\n\n", state.GenPreview.Select(WordFormatter.FormatPendingLine));
 
         await Bot.SendMessage(
             chatId,
@@ -726,30 +706,24 @@ public sealed class TeacherHandler(
         }
 
         var batchId = Guid.NewGuid();
-        var words = state.GenPreview.Select(word => new Word
-        {
-            OriginalWord = word.Original,
-            Translation = word.Translation,
-            EnglishLevel = word.EnglishLevel ?? state.GenLevel,
-            Topic = state.GenTopic,
-            BatchId = batchId,
-            AddedByUserId = userId,
-            ForStudentId = state.SelectedStudentId.Value
-        }).ToList();
-
-        await Db.SaveWordsAsync(words);
+        await Db.SaveWordsFromEntriesAsync(
+            state.GenPreview,
+            userId,
+            state.SelectedStudentId.Value,
+            state.GenTopic,
+            batchId);
 
         var teacher = await Db.GetUserAsync(userId);
         var student = await Db.GetUserAsync(state.SelectedStudentId.Value);
         await Bot.SendMessage(
             chatId,
-            $"✅ *{words.Count}* {state.GenLevel} words saved for *{WordFormatter.EscapeMarkdown(student?.DisplayName ?? string.Empty)}*!",
+            $"✅ *{state.GenPreview.Count}* {state.GenLevel} words saved for *{WordFormatter.EscapeMarkdown(student?.DisplayName ?? string.Empty)}*!",
             parseMode: ParseMode.Markdown,
             cancellationToken: ct);
 
         try
         {
-            var body = string.Join("\n\n", words.Select(word => $"*[{word.EnglishLevel}]* {WordFormatter.EscapeMarkdown(word.Translation)}"));
+            var body = string.Join("\n\n", state.GenPreview.Select(WordFormatter.FormatPendingLine));
             var topicNote = state.GenTopic is not null ? $" · {WordFormatter.EscapeMarkdown(state.GenTopic)}" : string.Empty;
             await Bot.SendMessage(
                 state.SelectedStudentId.Value,
@@ -1195,7 +1169,7 @@ public sealed class TeacherHandler(
 
         var studentName = (await Db.GetUserAsync(state.DeleteStudentId.Value))?.DisplayName ?? state.DeleteStudentId.ToString()!;
         var ids = state.DeleteWords.Select(w => w.Id);
-        await Db.DeleteWordsByIdsAsync(ids);
+        await Db.DeleteWordsByIdsAsync(ids, state.DeleteStudentId.Value);
         var count = state.DeleteWords.Count;
         var level = state.DeleteLevel ?? "";
         ResetState(userId);
@@ -1251,7 +1225,7 @@ public sealed class TeacherHandler(
         }
 
         var studentName = (await Db.GetUserAsync(state.DeleteStudentId.Value))?.DisplayName ?? state.DeleteStudentId.ToString()!;
-        await Db.DeleteWordsByIdsAsync(toDelete.Select(w => w.Id));
+        await Db.DeleteWordsByIdsAsync(toDelete.Select(w => w.Id), state.DeleteStudentId.Value);
         var level = state.DeleteLevel ?? "";
         ResetState(userId);
 

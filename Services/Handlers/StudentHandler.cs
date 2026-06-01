@@ -7,7 +7,7 @@ using KnowlBot.UI;
 
 namespace KnowlBot.Services.Handlers;
 
-public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, ConversationStateManager states, IOpenAiService openAi)
+public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, ConversationStateManager states, IAiService openAi)
     : HandlerBase(bot, db, states)
 {
     public async Task HandleCallbackAsync(string data, long userId, long chatId, CancellationToken ct)
@@ -289,7 +289,7 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
         {
             var existingWords = await Db.GetAllWordOriginalsAsync(userId);
             var generated = await openAi.GenerateWordsByLevelAsync(state.GenLevel, state.GenCount, state.GenTopic, existingWords);
-            var preview = WordFormatter.BuildPendingWordsFromGeneration(generated);
+            var preview = generated;
 
             MutateState(userId, s => { s.State = UserState.None; s.GenPreview = preview; });
 
@@ -320,11 +320,7 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
         var state = GetState(userId);
         var topicNote = state.GenTopic is not null ? $" · 🏷️ _{WordFormatter.EscapeMarkdown(state.GenTopic)}_" : string.Empty;
         var header = $"🤖 *{state.GenPreview.Count} {state.GenLevel} words*{topicNote}:";
-        var body = string.Join("\n\n", state.GenPreview.Select(w =>
-        {
-            var tag = w.EnglishLevel is not null ? $"*[{w.EnglishLevel}]* " : string.Empty;
-            return $"{tag}{WordFormatter.EscapeMarkdown(w.Translation)}";
-        }));
+        var body = string.Join("\n\n", state.GenPreview.Select(WordFormatter.FormatPendingLine));
 
         await Bot.SendMessage(
             chatId,
@@ -344,24 +340,19 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
         }
 
         var batchId = Guid.NewGuid();
-        var words = state.GenPreview.Select(w => new Word
-        {
-            OriginalWord = w.Original,
-            Translation = w.Translation,
-            EnglishLevel = w.EnglishLevel ?? state.GenLevel,
-            Topic = state.GenTopic,
-            BatchId = batchId,
-            AddedByUserId = userId,
-            ForStudentId = userId
-        }).ToList();
+        await Db.SaveWordsFromEntriesAsync(
+            state.GenPreview,
+            userId,
+            userId,
+            state.GenTopic,
+            batchId);
 
-        await Db.SaveWordsAsync(words);
-
+        var savedCount = state.GenPreview.Count;
         MutateState(userId, s => { s.GenLevel = null; s.GenCount = 0; s.GenTopic = null; s.GenPreview = new(); });
 
         await Bot.SendMessage(
             chatId,
-            $"✅ *{words.Count}* words added to your vocabulary!",
+            $"✅ *{savedCount}* words added to your vocabulary!",
             parseMode: ParseMode.Markdown,
             cancellationToken: ct);
 
@@ -376,10 +367,7 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
         MutateState(userId, s => s.State = UserState.AwaitingWordRemoval);
 
         var numbered = string.Join("\n", state.GenPreview.Select((w, i) =>
-        {
-            var tag = w.EnglishLevel is not null ? $"*[{w.EnglishLevel}]* " : string.Empty;
-            return $"{i + 1}. {tag}{WordFormatter.EscapeMarkdown(w.Translation)}";
-        }));
+            $"{i + 1}. {WordFormatter.FormatPendingLine(w)}"));
 
         await Bot.SendMessage(
             chatId,

@@ -8,6 +8,7 @@ public sealed class DatabaseService : IDatabaseService
 {
     private readonly IMongoCollection<User>              _users;
     private readonly IMongoCollection<Word>              _words;
+    private readonly IMongoCollection<UserWord>          _userWords;
     private readonly IMongoCollection<WordStat>          _wordStats;
     private readonly IMongoCollection<TeacherStudent>    _teacherStudents;
     private readonly IMongoCollection<PendingInvitation> _pendingInvitations;
@@ -16,6 +17,7 @@ public sealed class DatabaseService : IDatabaseService
     {
         _users              = db.GetCollection<User>("users");
         _words              = db.GetCollection<Word>("words");
+        _userWords          = db.GetCollection<UserWord>("user_words");
         _wordStats          = db.GetCollection<WordStat>("word_stats");
         _teacherStudents    = db.GetCollection<TeacherStudent>("teacher_students");
         _pendingInvitations = db.GetCollection<PendingInvitation>("pending_invitations");
@@ -23,13 +25,28 @@ public sealed class DatabaseService : IDatabaseService
 
     public async Task InitializeAsync()
     {
+        // Global words: unique by normalised OriginalWord
         await _words.Indexes.CreateManyAsync(new[]
         {
-            new CreateIndexModel<Word>(Builders<Word>.IndexKeys.Ascending(w => w.ForStudentId)),
-            new CreateIndexModel<Word>(Builders<Word>.IndexKeys.Ascending(w => w.AddedByUserId)),
-            new CreateIndexModel<Word>(Builders<Word>.IndexKeys.Combine(
-                Builders<Word>.IndexKeys.Ascending(w => w.ForStudentId),
-                Builders<Word>.IndexKeys.Ascending(w => w.EnglishLevel)))
+            new CreateIndexModel<Word>(
+                Builders<Word>.IndexKeys.Ascending(w => w.OriginalWord),
+                new CreateIndexOptions { Unique = true }),
+            new CreateIndexModel<Word>(
+                Builders<Word>.IndexKeys.Ascending(w => w.CefrLevel))
+        });
+
+        // user_words: unique per (word, student)
+        await _userWords.Indexes.CreateManyAsync(new[]
+        {
+            new CreateIndexModel<UserWord>(
+                Builders<UserWord>.IndexKeys.Combine(
+                    Builders<UserWord>.IndexKeys.Ascending(uw => uw.WordId),
+                    Builders<UserWord>.IndexKeys.Ascending(uw => uw.UserId)),
+                new CreateIndexOptions { Unique = true }),
+            new CreateIndexModel<UserWord>(
+                Builders<UserWord>.IndexKeys.Ascending(uw => uw.UserId)),
+            new CreateIndexModel<UserWord>(
+                Builders<UserWord>.IndexKeys.Ascending(uw => uw.AddedByUserId))
         });
 
         await _wordStats.Indexes.CreateManyAsync(new[]
@@ -194,145 +211,242 @@ public sealed class DatabaseService : IDatabaseService
         await _pendingInvitations.DeleteOneAsync(p => p.TeacherId == teacherId && p.StudentUsername == clean);
     }
 
-    public async Task SaveWordsAsync(IEnumerable<Word> words)
+    public async Task SaveWordsFromEntriesAsync(
+        IEnumerable<PendingWordEntry> entries, long addedById, long forStudentId, string? topic, Guid batchId)
     {
-        var list = words.ToList();
-        if (list.Count == 0)
-        {
-            return;
-        }
+        var list = entries.ToList();
+        if (list.Count == 0) return;
 
-        var batchTime = DateTime.UtcNow;
-        foreach (var word in list)
-        {
-            word.CreatedAt = batchTime;
-        }
+        var now = DateTime.UtcNow;
 
-        await _words.InsertManyAsync(list);
+        foreach (var entry in list)
+        {
+            var normalized = entry.Word.Trim().ToLowerInvariant();
+            if (string.IsNullOrEmpty(normalized)) continue;
+
+            var wordId = await FindOrCreateWordAsync(entry, normalized, now);
+            if (wordId is null) continue;
+
+            try
+            {
+                await _userWords.InsertOneAsync(new UserWord
+                {
+                    WordId        = wordId,
+                    UserId        = forStudentId,
+                    AddedByUserId = addedById,
+                    Topic         = topic,
+                    BatchId       = batchId,
+                    AddedAt       = now
+                });
+            }
+            catch (MongoWriteException ex) when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey)
+            {
+                // Student already has this word — skip silently
+            }
+        }
+    }
+
+    private async Task<string?> FindOrCreateWordAsync(PendingWordEntry entry, string normalized, DateTime now)
+    {
+        var existing = await _words.Find(w => w.OriginalWord == normalized).FirstOrDefaultAsync();
+        if (existing is not null) return existing.Id;
+
+        var word = new Word
+        {
+            OriginalWord            = normalized,
+            CefrLevel               = entry.CefrLevel,
+            Synonym                 = entry.Synonym,
+            Transcription           = entry.Transcription,
+            MostlyUsedTranslation   = entry.MostlyUsedTranslation,
+            OtherTranslation        = entry.OtherTranslation,
+            ExampleUsage            = entry.ExampleUsage,
+            ExampleUsageTranslation = entry.ExampleUsageTranslation,
+            CreatedAt               = now
+        };
+
+        try
+        {
+            await _words.InsertOneAsync(word);
+            return word.Id;
+        }
+        catch (MongoWriteException ex) when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey)
+        {
+            // Race condition: another process inserted it first
+            var raced = await _words.Find(w => w.OriginalWord == normalized).FirstOrDefaultAsync();
+            return raced?.Id;
+        }
+    }
+
+    public async Task AssignPoolWordsAsync(IEnumerable<Word> poolWords, long teacherId, long studentId, Guid batchId)
+    {
+        var now = DateTime.UtcNow;
+        foreach (var word in poolWords)
+        {
+            try
+            {
+                await _userWords.InsertOneAsync(new UserWord
+                {
+                    WordId        = word.Id,
+                    UserId        = studentId,
+                    AddedByUserId = teacherId,
+                    Topic         = word.Topic,
+                    BatchId       = batchId,
+                    AddedAt       = now
+                });
+            }
+            catch (MongoWriteException ex) when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey)
+            {
+                // Already assigned — skip
+            }
+        }
     }
 
     public async Task<List<Word>> GetWordsForBrowsingAsync(long teacherId, long studentId, string filter)
     {
-        var fb = Builders<Word>.Filter;
-        var query = fb.Eq(w => w.ForStudentId, studentId);
+        var fb = Builders<UserWord>.Filter;
+        var query = fb.Eq(uw => uw.UserId, studentId);
         query = filter switch
         {
-            "teacher" => fb.And(query, fb.Eq(w => w.AddedByUserId, teacherId)),
-            "student" => fb.And(query, fb.Eq(w => w.AddedByUserId, studentId)),
-            _ => query
+            "teacher" => fb.And(query, fb.Eq(uw => uw.AddedByUserId, teacherId)),
+            "student" => fb.And(query, fb.Eq(uw => uw.AddedByUserId, studentId)),
+            _         => query
         };
 
-        var words = await _words.Find(query).ToListAsync();
-        return words
-            .OrderBy(w => w.EnglishLevel ?? "Z")
+        var userWords = await _userWords.Find(query).ToListAsync();
+        if (userWords.Count == 0) return [];
+
+        var wordIds = userWords.Select(uw => uw.WordId).ToList();
+        var words   = await _words.Find(Builders<Word>.Filter.In(w => w.Id, wordIds)).ToListAsync();
+
+        return HydrateWords(userWords, words)
+            .OrderBy(w => w.CefrLevel ?? "Z")
             .ThenBy(w => w.CreatedAt)
             .ToList();
     }
 
     public async Task<List<Word>> GetWordsForStudentAsync(long studentId)
     {
-        var words = await _words.Find(w => w.ForStudentId == studentId).ToListAsync();
-        return words
-            .OrderBy(w => w.EnglishLevel ?? "Z")
+        var userWords = await _userWords.Find(uw => uw.UserId == studentId).ToListAsync();
+        if (userWords.Count == 0) return [];
+
+        var wordIds = userWords.Select(uw => uw.WordId).ToList();
+        var words   = await _words.Find(Builders<Word>.Filter.In(w => w.Id, wordIds)).ToListAsync();
+
+        return HydrateWords(userWords, words)
+            .OrderBy(w => w.CefrLevel ?? "Z")
             .ThenByDescending(w => w.CreatedAt)
             .ToList();
     }
 
     public async Task<List<Word>> GetPoolWordsAsync(long teacherId, long studentId, string? level, int count)
     {
-        var alreadySentOriginals = await _words.Find(w => w.AddedByUserId == teacherId && w.ForStudentId == studentId)
-            .Project(w => w.OriginalWord)
+        var teacherWordIds = await _userWords
+            .Find(Builders<UserWord>.Filter.Eq(uw => uw.AddedByUserId, teacherId))
+            .Project(uw => uw.WordId)
             .ToListAsync();
 
-        var fb = Builders<Word>.Filter;
-        var filter = fb.And(
-            fb.Eq(w => w.AddedByUserId, teacherId),
-            fb.Ne(w => w.ForStudentId, studentId),
-            fb.Nin(w => w.OriginalWord, alreadySentOriginals));
+        if (teacherWordIds.Count == 0) return [];
 
+        var studentWordIdSet = (await _userWords
+            .Find(Builders<UserWord>.Filter.Eq(uw => uw.UserId, studentId))
+            .Project(uw => uw.WordId)
+            .ToListAsync())
+            .ToHashSet();
+
+        var poolWordIds = teacherWordIds
+            .Where(id => !studentWordIdSet.Contains(id))
+            .Distinct()
+            .ToList();
+
+        if (poolWordIds.Count == 0) return [];
+
+        var wordFilter = Builders<Word>.Filter.In(w => w.Id, poolWordIds);
         if (!string.IsNullOrEmpty(level))
-        {
-            filter = fb.And(filter, fb.Eq(w => w.EnglishLevel, level));
-        }
+            wordFilter = Builders<Word>.Filter.And(wordFilter, Builders<Word>.Filter.Eq(w => w.CefrLevel, level));
 
-        var candidates = await _words.Find(filter)
-            .Project(w => new Word
-            {
-                OriginalWord = w.OriginalWord,
-                Translation = w.Translation,
-                EnglishLevel = w.EnglishLevel,
-                Topic = w.Topic
-            })
+        var candidates = await _words.Find(wordFilter).ToListAsync();
+        if (candidates.Count == 0) return [];
+
+        var selected    = candidates.OrderBy(_ => Random.Shared.Next()).Take(count).ToList();
+        var selectedIds = selected.Select(w => w.Id).ToList();
+
+        // Populate topic from the teacher's original user_word
+        var teacherUserWords = await _userWords
+            .Find(Builders<UserWord>.Filter.And(
+                Builders<UserWord>.Filter.Eq(uw => uw.AddedByUserId, teacherId),
+                Builders<UserWord>.Filter.In(uw => uw.WordId, selectedIds)))
             .ToListAsync();
 
-        var shuffled = candidates.OrderBy(_ => Random.Shared.Next()).ToList();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var result = new List<Word>();
+        var topicMap = teacherUserWords
+            .GroupBy(uw => uw.WordId)
+            .ToDictionary(g => g.Key, g => g.First().Topic);
 
-        foreach (var candidate in shuffled)
-        {
-            if (!seen.Add(candidate.OriginalWord))
-            {
-                continue;
-            }
+        foreach (var word in selected)
+            word.Topic = topicMap.GetValueOrDefault(word.Id);
 
-            result.Add(candidate);
-            if (result.Count >= count)
-            {
-                break;
-            }
-        }
-
-        return result;
+        return selected;
     }
 
     public async Task<List<Word>> GetWordsSentToStudentAsync(long teacherId, long studentId, int top = 50)
     {
-        var words = await _words
-            .Find(w => w.AddedByUserId == teacherId && w.ForStudentId == studentId)
+        var userWords = await _userWords
+            .Find(Builders<UserWord>.Filter.And(
+                Builders<UserWord>.Filter.Eq(uw => uw.UserId, studentId),
+                Builders<UserWord>.Filter.Eq(uw => uw.AddedByUserId, teacherId)))
+            .SortByDescending(uw => uw.AddedAt)
+            .Limit(top)
             .ToListAsync();
 
-        return words
-            .OrderBy(w => w.EnglishLevel ?? "Z")
+        if (userWords.Count == 0) return [];
+
+        var wordIds = userWords.Select(uw => uw.WordId).ToList();
+        var words   = await _words.Find(Builders<Word>.Filter.In(w => w.Id, wordIds)).ToListAsync();
+
+        return HydrateWords(userWords, words)
+            .OrderBy(w => w.CefrLevel ?? "Z")
             .ThenByDescending(w => w.CreatedAt)
-            .Take(top)
             .ToList();
     }
 
     public async Task<List<Word>> GetWordsForQuizAsync(long studentId, string? level, string? topic, int count)
     {
-        var fb = Builders<Word>.Filter;
-        var filter = fb.Eq(w => w.ForStudentId, studentId);
-        if (!string.IsNullOrEmpty(level))
-        {
-            filter = fb.And(filter, fb.Eq(w => w.EnglishLevel, level));
-        }
+        var fb = Builders<UserWord>.Filter;
+        var uwFilter = fb.Eq(uw => uw.UserId, studentId);
         if (!string.IsNullOrEmpty(topic))
+            uwFilter = fb.And(uwFilter, fb.Eq(uw => uw.Topic, topic));
+
+        var userWords = await _userWords.Find(uwFilter).ToListAsync();
+        if (userWords.Count == 0) return [];
+
+        var wordIds    = userWords.Select(uw => uw.WordId).ToList();
+        var wordFilter = Builders<Word>.Filter.In(w => w.Id, wordIds);
+        if (!string.IsNullOrEmpty(level))
+            wordFilter = Builders<Word>.Filter.And(wordFilter, Builders<Word>.Filter.Eq(w => w.CefrLevel, level));
+
+        var words = await _words.Find(wordFilter).ToListAsync();
+        if (words.Count == 0) return [];
+
+        // Hydrate with user_word metadata
+        var uwMap = userWords.ToDictionary(uw => uw.WordId);
+        foreach (var word in words)
         {
-            filter = fb.And(filter, fb.Eq(w => w.Topic, topic));
+            if (uwMap.TryGetValue(word.Id, out var uw))
+            {
+                word.Topic         = uw.Topic;
+                word.AddedByUserId = uw.AddedByUserId;
+                word.BatchId       = uw.BatchId;
+                word.CreatedAt     = uw.AddedAt;
+            }
         }
 
-        var raw = await _words.Find(filter).ToListAsync();
-        var unique = raw
-            .GroupBy(w => w.OriginalWord.ToLowerInvariant())
-            .Select(group => group.OrderByDescending(w => w.CreatedAt).First())
-            .ToList();
-
-        if (unique.Count == 0)
-        {
-            return unique;
-        }
-
-        var ids = unique.Select(w => w.Id).ToList();
-        var stats = await _wordStats
-            .Find(s => s.StudentId == studentId && ids.Contains(s.WordId))
-            .ToListAsync();
+        var ids     = words.Select(w => w.Id).ToList();
+        var stats   = await _wordStats.Find(s => s.StudentId == studentId && ids.Contains(s.WordId)).ToListAsync();
         var statMap = stats.ToDictionary(s => s.WordId);
 
-        var normal = new List<Word>();
+        var normal       = new List<Word>();
         var deprioritized = new List<Word>();
 
-        foreach (var word in unique)
+        foreach (var word in words)
         {
             if (statMap.TryGetValue(word.Id, out var stat))
             {
@@ -347,15 +461,12 @@ public sealed class DatabaseService : IDatabaseService
                     }
                 }
             }
-
             normal.Add(word);
         }
 
         var result = normal.OrderBy(_ => Random.Shared.Next()).Take(count).ToList();
         if (result.Count < count)
-        {
             result.AddRange(deprioritized.OrderBy(_ => Random.Shared.Next()).Take(count - result.Count));
-        }
 
         return result;
     }
@@ -392,25 +503,33 @@ public sealed class DatabaseService : IDatabaseService
 
     public async Task<List<Word>> GetWordsForMistakesAsync(long studentId, int count)
     {
+        var userWordIdSet = (await _userWords
+            .Find(Builders<UserWord>.Filter.Eq(uw => uw.UserId, studentId))
+            .Project(uw => uw.WordId)
+            .ToListAsync())
+            .ToHashSet();
+
+        if (userWordIdSet.Count == 0) return [];
+
         var topStats = await _wordStats
             .Find(s => s.StudentId == studentId && s.WrongCount > 0)
             .SortByDescending(s => s.WrongCount)
-            .Limit(count)
+            .Limit(count * 2)
             .ToListAsync();
 
-        if (topStats.Count == 0)
-        {
-            return [];
-        }
+        var validStats = topStats.Where(s => userWordIdSet.Contains(s.WordId)).Take(count).ToList();
+        if (validStats.Count == 0) return [];
 
-        var wordIds = topStats.Select(s => s.WordId).ToList();
-        var words = await _words.Find(Builders<Word>.Filter.In(w => w.Id, wordIds)).ToListAsync();
-        var wordMap = words.ToDictionary(w => w.Id);
+        var wordIds = validStats.Select(s => s.WordId).ToList();
+        var words   = await _words.Find(Builders<Word>.Filter.In(w => w.Id, wordIds)).ToListAsync();
 
-        return topStats
-            .Select(stat => wordMap.GetValueOrDefault(stat.WordId))
-            .OfType<Word>()
-            .ToList();
+        var userWords = await _userWords
+            .Find(Builders<UserWord>.Filter.And(
+                Builders<UserWord>.Filter.Eq(uw => uw.UserId, studentId),
+                Builders<UserWord>.Filter.In(uw => uw.WordId, wordIds)))
+            .ToListAsync();
+
+        return HydrateWords(userWords, words);
     }
 
     public async Task ReduceWrongCountAsync(long studentId, string wordId)
@@ -428,106 +547,193 @@ public sealed class DatabaseService : IDatabaseService
 
     public async Task<List<string>> GetTopicsForStudentAsync(long studentId)
     {
-        var topics = await _words.Find(w => w.ForStudentId == studentId && w.Topic != null)
-            .Project(w => w.Topic!)
+        var topics = await _userWords
+            .Find(Builders<UserWord>.Filter.And(
+                Builders<UserWord>.Filter.Eq(uw => uw.UserId, studentId),
+                Builders<UserWord>.Filter.Ne(uw => uw.Topic, null)))
+            .Project(uw => uw.Topic!)
             .ToListAsync();
 
-        return topics.Distinct().OrderBy(topic => topic).ToList();
+        return topics.Distinct().OrderBy(t => t).ToList();
     }
 
     public async Task<List<Word>> GetWordsByTopicAsync(long studentId, string topic)
     {
-        var words = await _words.Find(w => w.ForStudentId == studentId && w.Topic == topic).ToListAsync();
-        return words
-            .OrderBy(w => w.EnglishLevel ?? "Z")
+        var userWords = await _userWords
+            .Find(Builders<UserWord>.Filter.And(
+                Builders<UserWord>.Filter.Eq(uw => uw.UserId, studentId),
+                Builders<UserWord>.Filter.Eq(uw => uw.Topic, topic)))
+            .ToListAsync();
+
+        if (userWords.Count == 0) return [];
+
+        var wordIds = userWords.Select(uw => uw.WordId).ToList();
+        var words   = await _words.Find(Builders<Word>.Filter.In(w => w.Id, wordIds)).ToListAsync();
+
+        return HydrateWords(userWords, words)
+            .OrderBy(w => w.CefrLevel ?? "Z")
             .ThenByDescending(w => w.CreatedAt)
             .ToList();
     }
 
     public async Task<List<Word>> GetWordsByLevelAsync(long studentId, string level, int top = 50)
     {
-        var words = await _words.Find(w => w.ForStudentId == studentId && w.EnglishLevel == level)
-            .SortBy(w => w.CreatedAt)
+        var userWordIds = await _userWords
+            .Find(Builders<UserWord>.Filter.Eq(uw => uw.UserId, studentId))
+            .Project(uw => uw.WordId)
+            .ToListAsync();
+
+        if (userWordIds.Count == 0) return [];
+
+        var words = await _words
+            .Find(Builders<Word>.Filter.And(
+                Builders<Word>.Filter.In(w => w.Id, userWordIds),
+                Builders<Word>.Filter.Eq(w => w.CefrLevel, level)))
             .Limit(top)
             .ToListAsync();
 
-        return words;
+        if (words.Count == 0) return [];
+
+        var wordIdSet = words.Select(w => w.Id).ToList();
+        var userWords = await _userWords
+            .Find(Builders<UserWord>.Filter.And(
+                Builders<UserWord>.Filter.Eq(uw => uw.UserId, studentId),
+                Builders<UserWord>.Filter.In(uw => uw.WordId, wordIdSet)))
+            .ToListAsync();
+
+        return HydrateWords(userWords, words);
     }
 
     public async Task<List<string>> GetAllWordOriginalsAsync(long studentId)
     {
-        var originals = await _words.Find(w => w.ForStudentId == studentId)
-            .Project(w => w.OriginalWord)
+        var userWordIds = await _userWords
+            .Find(Builders<UserWord>.Filter.Eq(uw => uw.UserId, studentId))
+            .Project(uw => uw.WordId)
             .ToListAsync();
 
-        return originals.Distinct().ToList();
+        if (userWordIds.Count == 0) return [];
+
+        return await _words
+            .Find(Builders<Word>.Filter.In(w => w.Id, userWordIds))
+            .Project(w => w.OriginalWord)
+            .ToListAsync();
     }
 
     public async Task<List<Word>> SearchWordsAsync(long studentId, string query, int maxResults = 15)
     {
         var q = query.Trim().ToLowerInvariant();
-        if (string.IsNullOrEmpty(q))
-        {
-            return [];
-        }
+        if (string.IsNullOrEmpty(q)) return [];
 
-        var all = await _words.Find(w => w.ForStudentId == studentId).ToListAsync();
+        var userWordIds = await _userWords
+            .Find(Builders<UserWord>.Filter.Eq(uw => uw.UserId, studentId))
+            .Project(uw => uw.WordId)
+            .ToListAsync();
+
+        if (userWordIds.Count == 0) return [];
+
+        var all = await _words.Find(Builders<Word>.Filter.In(w => w.Id, userWordIds)).ToListAsync();
+        var userWordsMap = (await _userWords
+            .Find(Builders<UserWord>.Filter.And(
+                Builders<UserWord>.Filter.Eq(uw => uw.UserId, studentId),
+                Builders<UserWord>.Filter.In(uw => uw.WordId, userWordIds)))
+            .ToListAsync())
+            .ToDictionary(uw => uw.WordId);
+
         var substringHits = all
             .Where(w => w.OriginalWord.Contains(q, StringComparison.OrdinalIgnoreCase)
-                     || w.Translation.Contains(q, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(w => w.EnglishLevel ?? "Z")
+                     || (w.MostlyUsedTranslation ?? "").Contains(q, StringComparison.OrdinalIgnoreCase)
+                     || (w.OtherTranslation ?? "").Contains(q, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(w => w.CefrLevel ?? "Z")
             .Take(maxResults)
             .ToList();
 
         if (substringHits.Count >= maxResults)
-        {
-            return substringHits;
-        }
+            return HydrateWords(substringHits.Select(w => userWordsMap[w.Id]), substringHits);
 
         var substringIds = substringHits.Select(w => w.Id).ToHashSet();
-        var candidates = all.Where(w => !substringIds.Contains(w.Id)).ToList();
-
-        var fuzzyHits = candidates
-            .Select(w =>
-            {
-                var distance = Levenshtein(q, w.OriginalWord.ToLowerInvariant());
-                return (Word: w, Distance: distance);
-            })
+        var fuzzyHits = all.Where(w => !substringIds.Contains(w.Id))
+            .Select(w => (Word: w, Distance: Levenshtein(q, w.OriginalWord.ToLowerInvariant())))
             .Where(x => x.Distance <= AdaptiveThreshold(q.Length, x.Word.OriginalWord.Length))
             .OrderBy(x => x.Distance)
-            .ThenBy(x => x.Word.EnglishLevel ?? "Z")
+            .ThenBy(x => x.Word.CefrLevel ?? "Z")
             .Take(maxResults - substringHits.Count)
             .Select(x => x.Word)
             .ToList();
 
-        return [.. substringHits, .. fuzzyHits];
+        var combined = substringHits.Concat(fuzzyHits).ToList();
+        var uwCombined = combined.Where(w => userWordsMap.ContainsKey(w.Id)).Select(w => userWordsMap[w.Id]);
+        return HydrateWords(uwCombined, combined);
+    }
+
+    public async Task DeleteWordsByIdsAsync(IEnumerable<string> wordIds, long studentId)
+    {
+        var ids = wordIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct().ToList();
+        if (ids.Count == 0) return;
+
+        await _userWords.DeleteManyAsync(
+            Builders<UserWord>.Filter.And(
+                Builders<UserWord>.Filter.Eq(uw => uw.UserId, studentId),
+                Builders<UserWord>.Filter.In(uw => uw.WordId, ids)));
+
+        await _wordStats.DeleteManyAsync(
+            Builders<WordStat>.Filter.And(
+                Builders<WordStat>.Filter.Eq(s => s.StudentId, studentId),
+                Builders<WordStat>.Filter.In(s => s.WordId, ids)));
     }
 
     public async Task DeleteWordsByLevelAsync(long studentId, string level)
     {
-        var ids = await _words.Find(w => w.ForStudentId == studentId && w.EnglishLevel == level)
+        var userWordIds = await _userWords
+            .Find(Builders<UserWord>.Filter.Eq(uw => uw.UserId, studentId))
+            .Project(uw => uw.WordId)
+            .ToListAsync();
+
+        if (userWordIds.Count == 0) return;
+
+        var matchingIds = await _words
+            .Find(Builders<Word>.Filter.And(
+                Builders<Word>.Filter.In(w => w.Id, userWordIds),
+                Builders<Word>.Filter.Eq(w => w.CefrLevel, level)))
             .Project(w => w.Id)
             .ToListAsync();
 
-        if (ids.Count == 0)
-        {
-            return;
-        }
+        if (matchingIds.Count == 0) return;
 
-        await _words.DeleteManyAsync(w => w.ForStudentId == studentId && w.EnglishLevel == level);
-        await _wordStats.DeleteManyAsync(Builders<WordStat>.Filter.In(s => s.WordId, ids));
+        await DeleteWordsByIdsAsync(matchingIds, studentId);
     }
 
-    public async Task DeleteWordsByIdsAsync(IEnumerable<string> wordIds)
+    // ---------------------------------------------------------------------------
+    // Private helpers
+    // ---------------------------------------------------------------------------
+
+    private static List<Word> HydrateWords(IEnumerable<UserWord> userWords, IEnumerable<Word> globalWords)
     {
-        var ids = wordIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct().ToList();
-        if (ids.Count == 0)
+        var wordMap = globalWords.ToDictionary(w => w.Id);
+        var result  = new List<Word>();
+
+        foreach (var uw in userWords)
         {
-            return;
+            if (!wordMap.TryGetValue(uw.WordId, out var gw)) continue;
+
+            result.Add(new Word
+            {
+                Id                      = gw.Id,
+                OriginalWord            = gw.OriginalWord,
+                CefrLevel               = gw.CefrLevel,
+                Synonym                 = gw.Synonym,
+                Transcription           = gw.Transcription,
+                MostlyUsedTranslation   = gw.MostlyUsedTranslation,
+                OtherTranslation        = gw.OtherTranslation,
+                ExampleUsage            = gw.ExampleUsage,
+                ExampleUsageTranslation = gw.ExampleUsageTranslation,
+                CreatedAt               = uw.AddedAt,
+                Topic                   = uw.Topic,
+                AddedByUserId           = uw.AddedByUserId,
+                BatchId                 = uw.BatchId
+            });
         }
 
-        await _words.DeleteManyAsync(Builders<Word>.Filter.In(w => w.Id, ids));
-        await _wordStats.DeleteManyAsync(Builders<WordStat>.Filter.In(s => s.WordId, ids));
+        return result;
     }
 
     private static int AdaptiveThreshold(int queryLength, int wordLength)
@@ -535,24 +741,18 @@ public sealed class DatabaseService : IDatabaseService
         var maxLength = Math.Max(queryLength, wordLength);
         return maxLength switch
         {
-            <= 3 => 0,
-            <= 5 => 1,
-            <= 8 => 2,
+            <= 3  => 0,
+            <= 5  => 1,
+            <= 8  => 2,
             <= 12 => 3,
-            _ => (int)(maxLength * 0.25)
+            _     => (int)(maxLength * 0.25)
         };
     }
 
     private static int Levenshtein(string a, string b)
     {
-        if (a.Length == 0)
-        {
-            return b.Length;
-        }
-        if (b.Length == 0)
-        {
-            return a.Length;
-        }
+        if (a.Length == 0) return b.Length;
+        if (b.Length == 0) return a.Length;
 
         var prev = Enumerable.Range(0, b.Length + 1).ToArray();
         var curr = new int[b.Length + 1];
@@ -565,7 +765,6 @@ public sealed class DatabaseService : IDatabaseService
                 var cost = a[i - 1] == b[j - 1] ? 0 : 1;
                 curr[j] = Math.Min(Math.Min(prev[j] + 1, curr[j - 1] + 1), prev[j - 1] + cost);
             }
-
             Array.Copy(curr, prev, curr.Length);
         }
 

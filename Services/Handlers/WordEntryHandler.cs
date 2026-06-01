@@ -10,10 +10,10 @@ public sealed class WordEntryHandler(
     ITelegramBotClient bot,
     IDatabaseService db,
     ConversationStateManager states,
-    IOpenAiService openAi)
+    IAiService openAi)
     : HandlerBase(bot, db, states)
 {
-    private IOpenAiService OpenAi { get; } = openAi;
+    private IAiService OpenAi { get; } = openAi;
 
     public Task HandleCallbackAsync(string data, long userId, long chatId, CancellationToken ct) => data switch
     {
@@ -31,8 +31,8 @@ public sealed class WordEntryHandler(
             return;
         }
 
-        var notice = await Bot.SendMessage(chatId, "⏳ Translating with AI…", cancellationToken: ct);
-        var translation = await OpenAi.TranslateWordsAsync(inputText);
+        var notice = await Bot.SendMessage(chatId, "⏳ Enriching words with AI…", cancellationToken: ct);
+        var entries = await OpenAi.EnrichWordsAsync(inputText);
 
         try
         {
@@ -42,17 +42,23 @@ public sealed class WordEntryHandler(
         {
         }
 
+        if (entries.Count == 0)
+        {
+            await Bot.SendMessage(chatId, "❌ AI could not process those words. Please try again.", cancellationToken: ct);
+            return;
+        }
+
         SetState(addedById, new ConversationState
         {
             State = UserState.AwaitingTopicChoice,
             SelectedStudentId = addedById == forStudentId ? null : forStudentId,
-            PendingWords = WordFormatter.BuildPendingWords(inputText, translation),
+            PendingWords = entries,
             PendingAddedByUserId = addedById,
-            PendingForStudentId = forStudentId,
-            PendingTranslationText = translation
+            PendingForStudentId = forStudentId
         });
 
-        await Bot.SendMessage(chatId, translation, cancellationToken: ct);
+        var preview = string.Join("\n\n", entries.Select(WordFormatter.FormatPendingLine));
+        await Bot.SendMessage(chatId, preview, parseMode: ParseMode.Markdown, cancellationToken: ct);
         await Bot.SendMessage(chatId, "🏷️ Add a topic to these words?", replyMarkup: Keyboards.TopicChoice(), cancellationToken: ct);
     }
 
@@ -66,7 +72,7 @@ public sealed class WordEntryHandler(
         }
 
         var notice = await Bot.SendMessage(chatId, "🤖 Detecting topic…", cancellationToken: ct);
-        var topic = await OpenAi.DetectTopicAsync(string.Join("\n", state.PendingWords.Select(word => word.Original)));
+        var topic = await OpenAi.DetectTopicAsync(string.Join("\n", state.PendingWords.Select(word => word.Word)));
 
         try
         {
@@ -121,18 +127,12 @@ public sealed class WordEntryHandler(
         }
 
         var batchId = Guid.NewGuid();
-        var wordsToSave = state.PendingWords.Select(word => new Word
-        {
-            OriginalWord = word.Original,
-            Translation = word.Translation,
-            Topic = topic,
-            EnglishLevel = word.EnglishLevel,
-            BatchId = batchId,
-            AddedByUserId = state.PendingAddedByUserId.Value,
-            ForStudentId = state.PendingForStudentId.Value
-        });
-
-        await Db.SaveWordsAsync(wordsToSave);
+        await Db.SaveWordsFromEntriesAsync(
+            state.PendingWords,
+            state.PendingAddedByUserId.Value,
+            state.PendingForStudentId.Value,
+            topic,
+            batchId);
 
         var savedMessage = topic is not null
             ? $"✅ Saved! Topic: *{WordFormatter.EscapeMarkdown(topic)}*"
@@ -144,12 +144,14 @@ public sealed class WordEntryHandler(
         {
             var teacher = await Db.GetUserAsync(state.PendingAddedByUserId.Value);
             var topicLine = topic is not null ? $"🏷️ Topic: {topic}\n\n" : string.Empty;
+            var wordLines = string.Join("\n\n", state.PendingWords.Select(WordFormatter.FormatPendingLine));
 
             try
             {
                 await Bot.SendMessage(
                     state.PendingForStudentId.Value,
-                    $"📚 New vocabulary from {teacher?.DisplayName ?? "your teacher"}:\n\n{topicLine}{state.PendingTranslationText}",
+                    $"📚 New vocabulary from {teacher?.DisplayName ?? "your teacher"}:\n\n{topicLine}{wordLines}",
+                    parseMode: ParseMode.Markdown,
                     cancellationToken: ct);
             }
             catch

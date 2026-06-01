@@ -28,7 +28,7 @@ services.AddSingleton<IMongoDatabase>(_ =>
     return client.GetDatabase(mongoDbName);
 });
 services.AddSingleton<IDatabaseService, DatabaseService>();
-services.AddSingleton<IOpenAiService>(_ => new ClaudeService(claudeApiKey));
+services.AddSingleton<IAiService>(_ => new ClaudeService(claudeApiKey));
 services.AddSingleton<ConversationStateManager>();
 services.AddSingleton<RegistrationHandler>(_ => new RegistrationHandler(
     _.GetRequiredService<ITelegramBotClient>(),
@@ -40,7 +40,7 @@ services.AddSingleton<StudentHandler>(sp => new StudentHandler(
     sp.GetRequiredService<ITelegramBotClient>(),
     sp.GetRequiredService<IDatabaseService>(),
     sp.GetRequiredService<ConversationStateManager>(),
-    sp.GetRequiredService<IOpenAiService>()));
+    sp.GetRequiredService<IAiService>()));
 services.AddSingleton<WordEntryHandler>();
 services.AddSingleton<QuizHandler>();
 services.AddSingleton<BotService>(sp => new BotService(

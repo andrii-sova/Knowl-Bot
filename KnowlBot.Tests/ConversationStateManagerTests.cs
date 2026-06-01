@@ -82,7 +82,7 @@ public class ConversationStateManagerTests
     {
         var words = new List<Word>
         {
-            new() { OriginalWord = "apple", Translation = "яблуко" }
+            new() { OriginalWord = "apple", MostlyUsedTranslation = "яблуко" }
         };
 
         _sut.Mutate(1, s =>

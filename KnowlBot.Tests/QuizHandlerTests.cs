@@ -251,10 +251,9 @@ public class QuizHandlerTests
         Enumerable.Range(1, count)
             .Select(i => new Word
             {
-                Id = $"id{i:D24}",
-                OriginalWord = $"word{i}",
-                Translation = $"слово{i}",
-                ForStudentId = UserId
+                Id                    = $"id{i:D24}",
+                OriginalWord          = $"word{i}",
+                MostlyUsedTranslation = $"слово{i}"
             })
             .ToList();
 }
