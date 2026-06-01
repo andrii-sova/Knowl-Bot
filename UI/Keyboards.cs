@@ -22,6 +22,12 @@ public static class Keyboards
             InlineKeyboardButton.WithCallbackData("🗑 Remove Student", "menu_remove_student"),
             InlineKeyboardButton.WithCallbackData("🔍 Search Words",   "menu_search")
         },
+        new[]
+        {
+            InlineKeyboardButton.WithCallbackData("📚 Vocabulary",  "menu_my_words"),
+            InlineKeyboardButton.WithCallbackData("🧩 Quiz",        "menu_quiz"),
+            InlineKeyboardButton.WithCallbackData("💪 Mistakes",    "menu_mistakes")
+        },
         new[] { InlineKeyboardButton.WithCallbackData("🗂 Delete Words",  "menu_delete_words") },
         new[] { InlineKeyboardButton.WithCallbackData("✏️ My Name",       "menu_set_name") }
     });

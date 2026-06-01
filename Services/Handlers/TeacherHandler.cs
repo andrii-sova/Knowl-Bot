@@ -273,6 +273,25 @@ public sealed class TeacherHandler(
     private async Task ShowStudentSelectionAsync(long teacherId, long chatId, string mode, CancellationToken ct)
     {
         var students = await Db.GetStudentsForTeacherAsync(teacherId);
+
+        if (mode == "send" || mode == "words_sent")
+        {
+            var prefix = mode == "send" ? "send_to_" : "words_sent_to_";
+            var myselfLabel = mode == "send" ? "📚 Myself" : "📖 My Words";
+            var title = mode == "send" ? "👥 Choose a recipient:" : "👥 Choose a student to view words sent:";
+
+            var rows = new List<InlineKeyboardButton[]>
+            {
+                new[] { InlineKeyboardButton.WithCallbackData(myselfLabel, $"{prefix}{teacherId}") }
+            };
+            foreach (var s in students)
+                rows.Add(new[] { InlineKeyboardButton.WithCallbackData(s.DisplayName, $"{prefix}{s.TelegramId}") });
+            rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back", "back_to_menu") });
+
+            await Bot.SendMessage(chatId, title, replyMarkup: new InlineKeyboardMarkup(rows), cancellationToken: ct);
+            return;
+        }
+
         if (students.Count == 0)
         {
             await Bot.SendMessage(
@@ -283,21 +302,8 @@ public sealed class TeacherHandler(
             return;
         }
 
-        var prefix = mode switch
-        {
-            "send" => "send_to_",
-            "remove" => "remove_student_",
-            _ => "words_sent_to_"
-        };
-
-        var title = mode switch
-        {
-            "send" => "👥 Choose a student to send vocabulary to:",
-            "remove" => "👥 Choose a student to remove:",
-            _ => "👥 Choose a student to view words sent:"
-        };
-
-        await Bot.SendMessage(chatId, title, replyMarkup: Keyboards.StudentList(students, prefix), cancellationToken: ct);
+        // mode == "remove" only reaches here
+        await Bot.SendMessage(chatId, "👥 Choose a student to remove:", replyMarkup: Keyboards.StudentList(students, "remove_student_"), cancellationToken: ct);
     }
 
     private async Task ShowMyStudentsAsync(long teacherId, long chatId, CancellationToken ct)
@@ -337,12 +343,16 @@ public sealed class TeacherHandler(
             await GoMenuAsync(userId, chatId, ct);
             return;
         }
-        var student = await Db.GetUserAsync(studentId);
 
         SetState(userId, new ConversationState { SelectedStudentId = studentId });
+
+        var messageText = studentId == userId
+            ? "📚 Adding words to *your personal vocabulary*\n\nHow would you like to add words?"
+            : $"📤 Sending vocabulary to *{WordFormatter.EscapeMarkdown((await Db.GetUserAsync(studentId))?.DisplayName ?? studentId.ToString())}*\n\nHow would you like to add words?";
+
         await Bot.SendMessage(
             chatId,
-            $"📤 Sending vocabulary to *{WordFormatter.EscapeMarkdown(student?.DisplayName ?? studentId.ToString())}*\n\nHow would you like to add words?",
+            messageText,
             parseMode: ParseMode.Markdown,
             replyMarkup: Keyboards.SendWordChoice(),
             cancellationToken: ct);
@@ -456,10 +466,13 @@ public sealed class TeacherHandler(
 
         await Bot.SendMessage(
             chatId,
-            $"✅ {state.PoolPreview.Count} words assigned to *{WordFormatter.EscapeMarkdown(student?.DisplayName ?? string.Empty)}*!",
+            state.SelectedStudentId.Value == userId
+                ? $"✅ {state.PoolPreview.Count} words added to *your personal vocabulary*!"
+                : $"✅ {state.PoolPreview.Count} words assigned to *{WordFormatter.EscapeMarkdown(student?.DisplayName ?? string.Empty)}*!",
             parseMode: ParseMode.Markdown,
             cancellationToken: ct);
 
+        if (state.SelectedStudentId.Value != userId)
         try
         {
             var notifyHeader = $"📚 New vocabulary from {WordFormatter.EscapeMarkdown(teacher?.DisplayName ?? "your teacher")}{WordFormatter.EscapeMarkdown(levelLabel)}:";
@@ -698,10 +711,13 @@ public sealed class TeacherHandler(
         var student = await Db.GetUserAsync(state.SelectedStudentId.Value);
         await Bot.SendMessage(
             chatId,
-            $"✅ *{state.GenPreview.Count}* {state.GenLevel} words saved for *{WordFormatter.EscapeMarkdown(student?.DisplayName ?? string.Empty)}*!",
+            state.SelectedStudentId.Value == userId
+                ? $"✅ *{state.GenPreview.Count}* {state.GenLevel} words added to *your personal vocabulary*!"
+                : $"✅ *{state.GenPreview.Count}* {state.GenLevel} words saved for *{WordFormatter.EscapeMarkdown(student?.DisplayName ?? string.Empty)}*!",
             parseMode: ParseMode.Markdown,
             cancellationToken: ct);
 
+        if (state.SelectedStudentId.Value != userId)
         try
         {
             var topicNote = state.GenTopic is not null ? $" · {WordFormatter.EscapeMarkdown(state.GenTopic)}" : string.Empty;
@@ -724,6 +740,14 @@ public sealed class TeacherHandler(
             return;
         }
         var student = await Db.GetUserAsync(studentId);
+
+        // For self, skip the "By teacher / By student" filter — show all words directly
+        if (studentId == userId)
+        {
+            MutateState(userId, state => { state.BrowsingStudentId = studentId; state.BrowsingFilter = "both"; });
+            await Bot.SendMessage(chatId, "📂 How would you like to view your words?", replyMarkup: Keyboards.WordModeSelection(), cancellationToken: ct);
+            return;
+        }
 
         MutateState(userId, state => state.BrowsingStudentId = studentId);
         await Bot.SendMessage(
