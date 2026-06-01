@@ -5,7 +5,7 @@ namespace KnowlBot.UI;
 
 public static class WordFormatter
 {
-    public static readonly string[] CefrLevels = ["A0", "A1", "A2", "B1", "B2", "C1", "C2"];
+    public static readonly string[] CefrLevels = ["A1", "A2", "B1", "B2", "C1", "C2"];
 
     private static readonly Regex CefrPrefix = new(@"^\[(A0|A1|A2|B1|B2|C1|C2)\]\s*", RegexOptions.Compiled);
 
