@@ -32,7 +32,17 @@ public sealed class WordEntryHandler(
         }
 
         var notice = await Bot.SendMessage(chatId, "⏳ Enriching words with AI…", cancellationToken: ct);
-        var entries = await OpenAi.EnrichWordsAsync(inputText);
+        List<PendingWordEntry> entries;
+        try
+        {
+            entries = await OpenAi.EnrichWordsAsync(inputText);
+        }
+        catch (Exception)
+        {
+            try { await Bot.DeleteMessage(chatId, notice.MessageId, cancellationToken: ct); } catch { }
+            await Bot.SendMessage(chatId, "❌ AI service error. Please try again or send fewer words at once.", cancellationToken: ct);
+            return;
+        }
 
         try
         {
