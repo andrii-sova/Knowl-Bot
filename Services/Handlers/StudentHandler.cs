@@ -135,8 +135,7 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
         var body = string.Join("\n\n", results.Select(WordFormatter.FormatWordLine));
         await Bot.SendMessage(
             chatId,
-            $"🔍 *{results.Count}* result(s) for *{WordFormatter.EscapeMarkdown(query)}*:\n\n{body}",
-            parseMode: ParseMode.Markdown,
+            $"🔍 {results.Count} result(s) for \"{query}\":\n\n{body}",
             replyMarkup: Keyboards.SearchResultNavigation(),
             cancellationToken: ct);
     }
@@ -191,7 +190,7 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
             var all = await Db.GetWordsForStudentFilteredAsync(userId, filter);
             words = all.Where(w => w.CefrLevel == level).ToList();
         }
-        await SendWordListAsync(userId, chatId, words, $"🔤 *{WordFormatter.EscapeMarkdown(level)}* words:", ct);
+        await SendWordListAsync(userId, chatId, words, $"🔤 {level} words:", ct);
     }
 
     private async Task ShowWordsByTopicAsync(long userId, long chatId, string data, CancellationToken ct)
@@ -205,7 +204,7 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
 
         var topic = state.CachedTopics[index];
         var words = await Db.GetWordsByTopicAsync(userId, topic);
-        await SendWordListAsync(userId, chatId, words, $"📚 {WordFormatter.EscapeMarkdown(topic)}:", ct);
+        await SendWordListAsync(userId, chatId, words, $"📚 {topic}:", ct);
     }
 
     private async Task SendWordListAsync(long userId, long chatId, IReadOnlyList<Word> words, string header, CancellationToken ct)
@@ -237,13 +236,12 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
         var slice = words.Skip(page * pageSize).Take(pageSize).ToList();
         var body = string.Join("\n\n", slice.Select(WordFormatter.FormatWordLine));
         var pageInfo = totalPages > 1
-            ? $"\n\n_Page {page + 1}/{totalPages} · {words.Count} words_"
-            : $"\n\n_{words.Count} word{(words.Count == 1 ? "" : "s")}_";
+            ? $"\n\n(Page {page + 1}/{totalPages} · {words.Count} words)"
+            : $"\n\n{words.Count} word{(words.Count == 1 ? "" : "s")}";
 
         await Bot.SendMessage(
             chatId,
             $"{state.VocabHeader}\n\n{body}{pageInfo}",
-            parseMode: ParseMode.Markdown,
             replyMarkup: Keyboards.VocabPageNavigation(page, totalPages),
             cancellationToken: ct);
     }
