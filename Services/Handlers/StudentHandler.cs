@@ -347,14 +347,13 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
     private async Task ShowStudentGenPreviewAsync(long userId, long chatId, CancellationToken ct)
     {
         var state = GetState(userId);
-        var topicNote = state.GenTopic is not null ? $" · 🏷️ _{WordFormatter.EscapeMarkdown(state.GenTopic)}_" : string.Empty;
-        var header = $"🤖 *{state.GenPreview.Count} {state.GenLevel} words*{topicNote}:";
+        var topicNote = state.GenTopic is not null ? $" · {state.GenTopic}" : string.Empty;
+        var header = $"🤖 {state.GenPreview.Count} {state.GenLevel} words{topicNote}:";
         var body = string.Join("\n\n", state.GenPreview.Select(WordFormatter.FormatPendingLine));
 
         await Bot.SendMessage(
             chatId,
             $"{header}\n\n{body}",
-            parseMode: ParseMode.Markdown,
             replyMarkup: Keyboards.SGenPreviewButtons(),
             cancellationToken: ct);
     }

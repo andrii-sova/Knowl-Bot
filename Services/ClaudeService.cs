@@ -1,5 +1,5 @@
-using System.Net.Http.Headers;
-using System.Text;
+using Anthropic;
+using Anthropic.Models.Messages;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using KnowlBot.Interfaces;
@@ -9,23 +9,17 @@ namespace KnowlBot.Services;
 
 public sealed class ClaudeService : IAiService
 {
-    private const string ApiUrl = "https://api.anthropic.com/v1/messages";
     private const string Model = "claude-haiku-4-5";
-
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         PropertyNameCaseInsensitive = true
     };
 
-    private readonly HttpClient _http;
+    private readonly AnthropicClient _client;
 
     public ClaudeService(string apiKey)
     {
-        _http = new HttpClient();
-        _http.DefaultRequestHeaders.Add("x-api-key", apiKey);
-        _http.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
-        _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        _client = new AnthropicClient { ApiKey = apiKey };
     }
 
     private const string EnrichPrompt =
@@ -40,24 +34,18 @@ public sealed class ClaudeService : IAiService
         "'Break a leg' → 'ні пуху ні пера' (not 'зламай ногу'). " +
         "'It's raining cats and dogs' → 'ллє як із відра'. " +
         "Always ask yourself: what does a native speaker actually mean when they say this?\n\n" +
-        "Return ONLY a valid JSON array, no other text. Each object must have EXACTLY these fields:\n" +
-        "{\n" +
-        "  \"word\": \"the English word or phrase (lowercase)\",\n" +
-        "  \"cefr_level\": \"A1|A2|B1|B2|C1|C2\",\n" +
-        "  \"synonym\": \"one English synonym or related phrase\",\n" +
-        "  \"transcription\": \"IPA without brackets, stress mark ˈ e.g. dɪˈmɪnɪʃ\",\n" +
-        "  \"mostly_used_translation\": \"EXACTLY ONE primary Ukrainian word or short phrase — the most natural idiomatic equivalent — no commas, no semicolons, no 'також', no alternatives\",\n" +
-        "  \"other_translation\": null or \"EXACTLY ONE secondary Ukrainian meaning — only for B2/C1/C2 if a genuinely different meaning exists, otherwise null\",\n" +
-        "  \"example_usage\": \"a natural example sentence in English showing real usage\",\n" +
-        "  \"example_usage_translation\": \"Ukrainian translation of the example sentence\"\n" +
-        "}\n\n" +
+        "Return ONLY a minified JSON array (no spaces/indentation). Each object must have EXACTLY these fields:\n" +
+        "{\"w\":\"word/phrase (lowercase)\",\"l\":\"A1|A2|B1|B2|C1|C2\",\"s\":\"ONE synonym — single word — NO commas\",\"tr\":\"IPA no brackets e.g. dɪˈmɪnɪʃ\",\"m\":\"ONE primary Ukrainian equivalent — no commas\",\"o\":null or \"ONE secondary Ukrainian meaning — B2/C1/C2 only if genuinely different — else null\",\"ex\":\"max 6 words\",\"et\":\"Ukrainian translation of example\"}\n\n" +
         "Rules:\n" +
         "- Use Cambridge Dictionary as the authoritative reference\n" +
-        "- For idioms, slang, and phrasal expressions: translate the idiomatic meaning, not the literal words\n" +
-        "- Translations MUST be in standard literary Ukrainian — NEVER use Russian or Russian-influenced words (русизми). Use authentic Ukrainian vocabulary (e.g. 'припинити' not 'затушити', 'вирішити' not 'порішати')\n" +
-        "- mostly_used_translation MUST be a single Ukrainian word or short phrase — NEVER use commas, semicolons, 'також', 'або', 'і' to list alternatives\n" +
-        "- other_translation MUST be null for A1/A2/B1 words — no exceptions\n" +
-        "- other_translation MUST also be null if the second meaning is just a synonym of the first\n" +
+        "- For idioms/slang/phrasal expressions: translate the idiomatic meaning, not the literal words\n" +
+        "- Translations MUST be in standard literary Ukrainian — NEVER use Russian or русизми\n" +
+        "- m MUST be a single word or short phrase — NEVER list alternatives\n" +
+        "- o MUST be null for A1/A2/B1 — no exceptions\n" +
+        "- o MUST be null if it's just a synonym of m\n" +
+        "- o MUST be Ukrainian ONLY — NEVER English — null if you cannot provide a genuinely different Ukrainian meaning\n" +
+        "- et MUST be a Ukrainian string for A1/A2/B1 words — NEVER null for these levels\n" +
+        "- et MUST be null for B2/C1/C2 words — no exceptions\n" +
         "- Output ONLY the JSON array, nothing else";
 
     private const int EnrichBatchSize = 10;
@@ -110,29 +98,23 @@ public sealed class ClaudeService : IAiService
             $"You are a certified English-Ukrainian translator and lexicographer with 15 years of professional experience. " +
             $"You specialize in authentic, idiomatic translation — not literal word-for-word equivalents.\n" +
             $"Generate exactly {count} English words or phrases at CEFR level {level}.{topicClause}\n\n" +
-            $"Return ONLY a valid JSON array. Each object must have EXACTLY these fields:\n" +
-            "{\n" +
-            $"  \"word\": \"the English word or phrase (lowercase)\",\n" +
-            $"  \"cefr_level\": \"{level}\",\n" +
-            "  \"synonym\": \"one English synonym or related phrase\",\n" +
-            "  \"transcription\": \"IPA without brackets, stress mark ˈ e.g. dɪˈmɪnɪʃ\",\n" +
-            "  \"mostly_used_translation\": \"EXACTLY ONE primary Ukrainian word or short phrase — the most natural idiomatic equivalent — no commas, no semicolons, no 'також', no alternatives\",\n" +
-            $"  \"other_translation\": {(IsHighLevel(level) ? "null or \"EXACTLY ONE secondary Ukrainian word/phrase — only if a genuinely different meaning exists — otherwise null\"" : "null /* MUST be null for this level */")},\n" +
-            "  \"example_usage\": \"a natural example sentence in English showing real usage\",\n" +
-            "  \"example_usage_translation\": \"Ukrainian translation of the example sentence\"\n" +
-            "}\n\n" +
+            $"Return ONLY a minified JSON array (no spaces/indentation). Each object must have EXACTLY these fields:\n" +
+            $"{{\"w\":\"word/phrase (lowercase)\",\"l\":\"{level}\",\"s\":\"ONE synonym — single word — NO commas\",\"tr\":\"IPA no brackets e.g. dɪˈmɪnɪʃ\",\"m\":\"ONE primary Ukrainian equivalent — no commas\",\"o\":{(IsHighLevel(level) ? "null or \"ONE secondary Ukrainian meaning — only if genuinely different — else null\"" : "null")},\"ex\":\"max 6 words\"{(IsHighLevel(level) ? "" : ",\\\"et\\\":\\\"Ukrainian translation of example\\\"")}  }}\n\n" +
             $"Rules:\n" +
             $"- Choose natural, useful everyday words a learner at {level} would need\n" +
-            $"- For idioms, slang, and phrasal expressions: translate the idiomatic meaning, not the literal words\n" +
-            $"- Use Cambridge Dictionary as the authoritative reference for Ukrainian translations\n" +
-            $"- Translations MUST be in standard literary Ukrainian — NEVER use Russian or Russian-influenced words (русизми). Use authentic Ukrainian vocabulary (e.g. 'припинити' not 'затушити', 'вирішити' not 'порішати')\n" +
-            $"- mostly_used_translation MUST be a single Ukrainian word or short phrase — NEVER list alternatives with commas, semicolons, or 'також'\n" +
+            $"- For idioms/slang/phrasal expressions: translate the idiomatic meaning, not literal words\n" +
+            $"- Use Cambridge Dictionary as the authoritative reference\n" +
+            $"- Translations MUST be in standard literary Ukrainian — NEVER use Russian or русизми\n" +
+            $"- m MUST be a single word or short phrase — NEVER list alternatives\n" +
             (IsHighLevel(level)
-                ? "- other_translation is ONLY for a genuinely different second meaning — null if the second meaning is just a synonym of the first\n"
-                : "- other_translation MUST be null — no exceptions for this level\n") +
-            $"- Output ONLY the JSON array, no headers, numbers, or extra text{excludeClause}";
+                ? "- o is ONLY for a genuinely different second Ukrainian meaning — null if it's a synonym of m\n" +
+                  "- o MUST be Ukrainian ONLY — NEVER English — null if no genuinely different Ukrainian meaning exists\n" +
+                  "- Do NOT include et field\n"
+                : "- o MUST be null — no exceptions for this level\n" +
+                  "- et MUST be a Ukrainian string — NEVER null or missing\n") +
+            $"- Output ONLY the JSON array{excludeClause}";
 
-        var response = await SendAsync(systemPrompt, $"Generate {count} {level} words.");
+        var response = await SendAsync(systemPrompt, $"Generate EXACTLY {count} {level} words. Output EXACTLY {count} JSON objects — no more, no less.");
         return ParseWordEntries(response);
     }
 
@@ -220,40 +202,47 @@ public sealed class ClaudeService : IAiService
         return (primary, string.IsNullOrWhiteSpace(secondary) ? null : secondary);
     }
 
+    // claude-haiku-4-5 pricing per million tokens
+    private const double InputCostPerMToken  = 0.80;
+    private const double OutputCostPerMToken = 4.00;
+
     private async Task<string> SendAsync(string systemPrompt, string userMessage)
     {
-        var body = JsonSerializer.Serialize(new
+        var message = await _client.Messages.Create(new()
         {
-            model = Model,
-            max_tokens = 8192,
-            system = systemPrompt,
-            messages = new[] { new { role = "user", content = userMessage } }
-        }, JsonOptions);
+            Model = Model,
+            MaxTokens = 4096,
+            System = systemPrompt,
+            Messages = new List<MessageParam>
+            {
+                new() { Role = Role.User, Content = userMessage }
+            }
+        });
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, ApiUrl)
+        var u = message.Usage;
+        double cost = (u.InputTokens  * InputCostPerMToken +
+                       u.OutputTokens * OutputCostPerMToken)
+                      / 1_000_000.0;
+
+        Console.WriteLine(
+            $"[WARNING] Claude cost: ${cost:F6} | in={u.InputTokens} out={u.OutputTokens}");
+
+        foreach (var block in message.Content)
         {
-            Content = new StringContent(body, Encoding.UTF8, "application/json")
-        };
-
-        using var response = await _http.SendAsync(request);
-        response.EnsureSuccessStatusCode();
-
-        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        return doc.RootElement
-            .GetProperty("content")[0]
-            .GetProperty("text")
-            .GetString()
-            ?.Trim() ?? string.Empty;
+            if (block.TryPickText(out var textBlock))
+                return textBlock.Text.Trim();
+        }
+        return string.Empty;
     }
 
     private sealed record WordEntryDto(
-        [property: JsonPropertyName("word")]                     string? Word,
-        [property: JsonPropertyName("cefr_level")]               string? CefrLevel,
-        [property: JsonPropertyName("synonym")]                  string? Synonym,
-        [property: JsonPropertyName("transcription")]            string? Transcription,
-        [property: JsonPropertyName("mostly_used_translation")]  string? MostlyUsedTranslation,
-        [property: JsonPropertyName("other_translation")]        string? OtherTranslation,
-        [property: JsonPropertyName("example_usage")]            string? ExampleUsage,
-        [property: JsonPropertyName("example_usage_translation")]string? ExampleUsageTranslation
+        [property: JsonPropertyName("w")]  string? Word,
+        [property: JsonPropertyName("l")]  string? CefrLevel,
+        [property: JsonPropertyName("s")]  string? Synonym,
+        [property: JsonPropertyName("tr")] string? Transcription,
+        [property: JsonPropertyName("m")]  string? MostlyUsedTranslation,
+        [property: JsonPropertyName("o")]  string? OtherTranslation,
+        [property: JsonPropertyName("ex")] string? ExampleUsage,
+        [property: JsonPropertyName("et")] string? ExampleUsageTranslation
     );
 }

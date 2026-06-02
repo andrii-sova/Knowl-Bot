@@ -53,8 +53,13 @@ public static class WordFormatter
         if (!string.IsNullOrWhiteSpace(w.OtherTranslation))
             sb.Append($", {w.OtherTranslation}");
 
-        if (!string.IsNullOrWhiteSpace(w.ExampleUsage) && !string.IsNullOrWhiteSpace(w.ExampleUsageTranslation))
-            sb.Append($" ({w.ExampleUsage} — {w.ExampleUsageTranslation})");
+        if (!string.IsNullOrWhiteSpace(w.ExampleUsage))
+        {
+            sb.Append($" ({w.ExampleUsage}");
+            if (!string.IsNullOrWhiteSpace(w.ExampleUsageTranslation))
+                sb.Append($" — {w.ExampleUsageTranslation}");
+            sb.Append(")");
+        }
 
         return sb.ToString();
     }
@@ -80,8 +85,13 @@ public static class WordFormatter
         if (!string.IsNullOrWhiteSpace(p.OtherTranslation))
             sb.Append($", {p.OtherTranslation}");
 
-        if (!string.IsNullOrWhiteSpace(p.ExampleUsage) && !string.IsNullOrWhiteSpace(p.ExampleUsageTranslation))
-            sb.Append($" ({p.ExampleUsage} — {p.ExampleUsageTranslation})");
+        if (!string.IsNullOrWhiteSpace(p.ExampleUsage))
+        {
+            sb.Append($" ({p.ExampleUsage}");
+            if (!string.IsNullOrWhiteSpace(p.ExampleUsageTranslation))
+                sb.Append($" — {p.ExampleUsageTranslation}");
+            sb.Append(")");
+        }
 
         return sb.ToString();
     }
