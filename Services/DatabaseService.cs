@@ -338,6 +338,29 @@ public sealed class DatabaseService : IDatabaseService
             .ToList();
     }
 
+    public async Task<List<Word>> GetWordsForStudentFilteredAsync(long studentId, string filter)
+    {
+        var fb    = Builders<UserWord>.Filter;
+        var query = fb.Eq(uw => uw.UserId, studentId);
+        query = filter switch
+        {
+            "teacher" => fb.And(query, fb.Ne(uw => uw.AddedByUserId, studentId)),
+            "student" => fb.And(query, fb.Eq(uw => uw.AddedByUserId, studentId)),
+            _         => query
+        };
+
+        var userWords = await _userWords.Find(query).ToListAsync();
+        if (userWords.Count == 0) return [];
+
+        var wordIds = userWords.Select(uw => uw.WordId).ToList();
+        var words   = await _words.Find(Builders<Word>.Filter.In(w => w.Id, wordIds)).ToListAsync();
+
+        return HydrateWords(userWords, words)
+            .OrderBy(w => w.CefrLevel ?? "Z")
+            .ThenByDescending(w => w.CreatedAt)
+            .ToList();
+    }
+
     public async Task<List<Word>> GetPoolWordsAsync(long teacherId, long studentId, string? level, int count)
     {
         var teacherWordIds = await _userWords

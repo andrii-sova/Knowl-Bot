@@ -23,6 +23,7 @@ public interface IDatabaseService
     Task AssignPoolWordsAsync(IEnumerable<Word> poolWords, long teacherId, long studentId, Guid batchId);
     Task<List<Word>> GetWordsForBrowsingAsync(long teacherId, long studentId, string filter);
     Task<List<Word>> GetWordsForStudentAsync(long studentId);
+    Task<List<Word>> GetWordsForStudentFilteredAsync(long studentId, string filter);
     Task<List<Word>> GetPoolWordsAsync(long teacherId, long studentId, string? level, int count);
     Task<List<Word>> GetWordsSentToStudentAsync(long teacherId, long studentId, int top = 50);
     Task<List<Word>> GetWordsForQuizAsync(long studentId, string? level, string? topic, int count);

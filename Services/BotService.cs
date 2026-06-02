@@ -248,7 +248,8 @@ public sealed class BotService(
     private static bool IsStudentCallback(string data) =>
         data is "menu_add_words" or "menu_my_words" or "stype_words" ||
         data.StartsWith("vocab_") ||
-        data.StartsWith("sgen_");
+        data.StartsWith("sgen_") ||
+        data.StartsWith("sfilter_");
 
     private static string FullMessage(Exception ex)
     {

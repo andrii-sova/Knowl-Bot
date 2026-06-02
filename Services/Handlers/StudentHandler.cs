@@ -70,13 +70,25 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
                     cancellationToken: ct);
                 break;
             case "vocab_all":
-                await SendWordListAsync(userId, chatId, await Db.GetWordsForStudentAsync(userId), "📚 Your vocabulary:", ct);
+            {
+                var filter = GetState(userId)?.BrowsingFilter;
+                var words  = filter is null or "both"
+                    ? await Db.GetWordsForStudentAsync(userId)
+                    : await Db.GetWordsForStudentFilteredAsync(userId, filter);
+                await SendWordListAsync(userId, chatId, words, "📚 Your vocabulary:", ct);
                 break;
+            }
             case "vocab_level":
                 await Bot.SendMessage(chatId, "🔤 Select a CEFR level:", replyMarkup: Keyboards.VocabLevelButtons(), cancellationToken: ct);
                 break;
             default:
-                if (data.StartsWith("vocab_t_"))
+                if (data.StartsWith("sfilter_"))
+                {
+                    var filter = data["sfilter_".Length..]; // "teacher" | "student" | "both"
+                    MutateState(userId, s => s.BrowsingFilter = filter);
+                    await ShowVocabBrowseOptionsAsync(userId, chatId, ct);
+                }
+                else if (data.StartsWith("vocab_t_"))
                 {
                     await ShowWordsByTopicAsync(userId, chatId, data, ct);
                 }
@@ -131,35 +143,54 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
 
     private async Task ShowMyWordsAsync(long userId, long chatId, CancellationToken ct)
     {
-        var topics = await Db.GetTopicsForStudentAsync(userId);
-        if (topics.Count == 0)
+        var words = await Db.GetWordsForStudentAsync(userId);
+        if (words.Count == 0)
         {
-            var words = await Db.GetWordsForStudentAsync(userId);
-            if (words.Count == 0)
-            {
-                await Bot.SendMessage(chatId, "Your vocabulary is empty. 📭", cancellationToken: ct);
-                return;
-            }
+            await Bot.SendMessage(chatId, "Your vocabulary is empty. 📭", cancellationToken: ct);
+            return;
+        }
 
-            await Bot.SendMessage(
-                chatId,
-                "📚 Browse your vocabulary:",
+        // Reset filter so user picks fresh each time
+        MutateState(userId, s => s.BrowsingFilter = null);
+        await Bot.SendMessage(
+            chatId,
+            "📚 Show words:",
+            replyMarkup: Keyboards.WordFilterSelection(forStudent: true),
+            cancellationToken: ct);
+    }
+
+    private async Task ShowVocabBrowseOptionsAsync(long userId, long chatId, CancellationToken ct)
+    {
+        var topics = await Db.GetTopicsForStudentAsync(userId);
+        if (topics.Count > 0)
+        {
+            MutateState(userId, s => s.CachedTopics = topics);
+            await Bot.SendMessage(chatId, "📂 How would you like to view?",
+                replyMarkup: Keyboards.VocabTopicButtons(topics), cancellationToken: ct);
+        }
+        else
+        {
+            await Bot.SendMessage(chatId, "📂 How would you like to view?",
                 replyMarkup: new InlineKeyboardMarkup(new[]
                 {
                     new[] { InlineKeyboardButton.WithCallbackData("🔤 By Level", "vocab_level") },
                     new[] { InlineKeyboardButton.WithCallbackData("📋 All Words", "vocab_all") }
                 }),
                 cancellationToken: ct);
-            return;
         }
-
-        MutateState(userId, state => state.CachedTopics = topics);
-        await Bot.SendMessage(chatId, "📚 Browse vocabulary by topic:", replyMarkup: Keyboards.VocabTopicButtons(topics), cancellationToken: ct);
     }
 
     private async Task ShowWordsByLevelAsync(long userId, long chatId, string level, CancellationToken ct)
     {
-        var words = await Db.GetWordsByLevelAsync(userId, level);
+        var filter = GetState(userId)?.BrowsingFilter;
+        List<Word> words;
+        if (filter is null or "both")
+            words = await Db.GetWordsByLevelAsync(userId, level);
+        else
+        {
+            var all = await Db.GetWordsForStudentFilteredAsync(userId, filter);
+            words = all.Where(w => w.CefrLevel == level).ToList();
+        }
         await SendWordListAsync(userId, chatId, words, $"🔤 *{WordFormatter.EscapeMarkdown(level)}* words:", ct);
     }
 

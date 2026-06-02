@@ -172,13 +172,18 @@ public static class Keyboards
         }
     });
 
-    public static InlineKeyboardMarkup WordFilterSelection() => new(new[]
+    public static InlineKeyboardMarkup WordFilterSelection(bool forStudent = false)
     {
-        new[] { InlineKeyboardButton.WithCallbackData("👨‍🏫 By teacher",  "wfilter_teacher") },
-        new[] { InlineKeyboardButton.WithCallbackData("🧑 By student",   "wfilter_student") },
-        new[] { InlineKeyboardButton.WithCallbackData("📋 Both",         "wfilter_both") },
-        new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back",         "back_to_menu") }
-    });
+        var prefix        = forStudent ? "sfilter_" : "wfilter_";
+        var studentLabel  = forStudent ? "🧑 By me" : "🧑 By student";
+        return new(new[]
+        {
+            new[] { InlineKeyboardButton.WithCallbackData("👨‍🏫 By teacher", prefix + "teacher") },
+            new[] { InlineKeyboardButton.WithCallbackData(studentLabel,      prefix + "student") },
+            new[] { InlineKeyboardButton.WithCallbackData("📋 Both",         prefix + "both") },
+            new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back",         "back_to_menu") }
+        });
+    }
 
     public static InlineKeyboardMarkup WordModeSelection() => new(new[]
     {
