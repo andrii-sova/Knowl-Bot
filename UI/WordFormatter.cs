@@ -12,7 +12,8 @@ public static class WordFormatter
     public static string EscapeMarkdown(string? text)
     {
         if (string.IsNullOrEmpty(text)) return string.Empty;
-        return Regex.Replace(text, @"([_\*`\[\\])", @"\$1");
+        // Escape all MarkdownV2 special characters
+        return Regex.Replace(text, @"([_\*\[\]()~`>#+\-=|{}.!\\])", @"\$1");
     }
 
     public static string Truncate(string s, int maxLength)

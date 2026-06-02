@@ -20,7 +20,10 @@ public class WordFormatterTests
     [InlineData("it_works", @"it\_works")]
     [InlineData("*bold*", @"\*bold\*")]
     [InlineData("`code`", @"\`code\`")]
-    [InlineData("[link]", @"\[link]")]
+    [InlineData("[link]", @"\[link\]")]
+    [InlineData("(paren)", @"\(paren\)")]
+    [InlineData("a-b", @"a\-b")]
+    [InlineData("end.", @"end\.")]
     public void EscapeMarkdown_EscapesSpecialChars(string input, string expected)
     {
         WordFormatter.EscapeMarkdown(input).Should().Be(expected);
