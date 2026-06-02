@@ -78,7 +78,6 @@ public abstract class HandlerBase(ITelegramBotClient bot, IDatabaseService db, C
             await Bot.SendMessage(
                 chatId,
                 text,
-                parseMode: Telegram.Bot.Types.Enums.ParseMode.MarkdownV2,
                 replyMarkup: isLast ? finalMarkup : null,
                 cancellationToken: ct);
         }
