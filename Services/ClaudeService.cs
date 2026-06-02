@@ -40,14 +40,17 @@ public sealed class ClaudeService : IAiService
         "  \"cefr_level\": \"A1|A2|B1|B2|C1|C2\",\n" +
         "  \"synonym\": \"one English synonym or related phrase\",\n" +
         "  \"transcription\": \"IPA without brackets, stress mark ˈ e.g. dɪˈmɪnɪʃ\",\n" +
-        "  \"mostly_used_translation\": \"primary Ukrainian translation (words only, no punctuation)\",\n" +
-        "  \"other_translation\": null or \"secondary Ukrainian translation for B2+ words if a meaningful second meaning exists\",\n" +
+        "  \"mostly_used_translation\": \"EXACTLY ONE primary Ukrainian word or short phrase — use Cambridge Dictionary as the authoritative source — no commas, no semicolons, no 'також', no alternatives\",\n" +
+        "  \"other_translation\": null or \"EXACTLY ONE secondary Ukrainian word or short phrase per Cambridge Dictionary — only for B2/C1/C2 if a genuinely different meaning exists, otherwise null\",\n" +
         "  \"example_usage\": \"a natural example sentence in English\",\n" +
         "  \"example_usage_translation\": \"Ukrainian translation of the example sentence\"\n" +
         "}\n\n" +
         "Rules:\n" +
-        "- mostly_used_translation and other_translation must be Ukrainian words only — no IPA, no examples, no extra punctuation\n" +
-        "- other_translation must be null for A1/A2/B1 words\n" +
+        "- Use Cambridge Dictionary as the authoritative reference for Ukrainian translations\n" +
+        "- Translations MUST be in standard literary Ukrainian — NEVER use Russian or Russian-influenced words (русизми). Use authentic Ukrainian vocabulary (e.g. 'припинити' not 'затушити', 'вирішити' not 'порішати')\n" +
+        "- mostly_used_translation MUST be a single Ukrainian word or short phrase — NEVER use commas, semicolons, 'також', 'або', 'і' to list alternatives\n" +
+        "- other_translation MUST be null for A1/A2/B1 words — no exceptions\n" +
+        "- other_translation MUST also be null if the second meaning is just a synonym of the first\n" +
         "- Output ONLY the JSON array, nothing else";
 
     public async Task<List<PendingWordEntry>> EnrichWordsAsync(string words)
@@ -86,13 +89,19 @@ public sealed class ClaudeService : IAiService
             $"  \"cefr_level\": \"{level}\",\n" +
             "  \"synonym\": \"one English synonym or related phrase\",\n" +
             "  \"transcription\": \"IPA without brackets, stress mark ˈ e.g. dɪˈmɪnɪʃ\",\n" +
-            "  \"mostly_used_translation\": \"primary Ukrainian translation (words only)\",\n" +
-            $"  \"other_translation\": {(IsHighLevel(level) ? "null or \"secondary Ukrainian translation if a meaningful second meaning exists\"" : "null")},\n" +
+            "  \"mostly_used_translation\": \"EXACTLY ONE primary Ukrainian word or short phrase — use Cambridge Dictionary as authoritative source — no commas, no semicolons, no 'також', no alternatives\",\n" +
+            $"  \"other_translation\": {(IsHighLevel(level) ? "null or \"EXACTLY ONE secondary Ukrainian word/phrase per Cambridge Dictionary — only if a genuinely different meaning exists — otherwise null\"" : "null /* MUST be null for this level */")},\n" +
             "  \"example_usage\": \"a natural example sentence in English\",\n" +
             "  \"example_usage_translation\": \"Ukrainian translation of the example sentence\"\n" +
             "}\n\n" +
             $"Rules:\n" +
             $"- Choose natural, useful everyday words a learner at {level} would need\n" +
+            $"- Use Cambridge Dictionary as the authoritative reference for Ukrainian translations\n" +
+            $"- Translations MUST be in standard literary Ukrainian — NEVER use Russian or Russian-influenced words (русизми). Use authentic Ukrainian vocabulary (e.g. 'припинити' not 'затушити', 'вирішити' not 'порішати')\n" +
+            $"- mostly_used_translation MUST be a single Ukrainian word or short phrase — NEVER list alternatives with commas, semicolons, or 'також'\n" +
+            (IsHighLevel(level)
+                ? "- other_translation is ONLY for a genuinely different second meaning — null if the second meaning is just a synonym of the first\n"
+                : "- other_translation MUST be null — no exceptions for this level\n") +
             $"- Output ONLY the JSON array, no headers, numbers, or extra text{excludeClause}";
 
         var response = await SendAsync(systemPrompt, $"Generate {count} {level} words.");
@@ -115,16 +124,23 @@ public sealed class ClaudeService : IAiService
             if (dtos is null) return [];
 
             return dtos
-                .Select(d => new PendingWordEntry
+                .Select(d =>
                 {
-                    Word                    = (d.Word ?? "").Trim().ToLowerInvariant(),
-                    CefrLevel               = (d.CefrLevel ?? "").Trim().ToUpper(),
-                    Synonym                 = (d.Synonym ?? "").Trim(),
-                    Transcription           = (d.Transcription ?? "").Trim(),
-                    MostlyUsedTranslation   = (d.MostlyUsedTranslation ?? "").Trim(),
-                    OtherTranslation        = string.IsNullOrWhiteSpace(d.OtherTranslation) ? null : d.OtherTranslation.Trim(),
-                    ExampleUsage            = (d.ExampleUsage ?? "").Trim(),
-                    ExampleUsageTranslation = (d.ExampleUsageTranslation ?? "").Trim()
+                    var (primary, secondary) = SplitTranslation(
+                        (d.MostlyUsedTranslation ?? "").Trim(),
+                        (d.OtherTranslation ?? "").Trim(),
+                        (d.CefrLevel ?? "").Trim().ToUpper());
+                    return new PendingWordEntry
+                    {
+                        Word                    = (d.Word ?? "").Trim().ToLowerInvariant(),
+                        CefrLevel               = (d.CefrLevel ?? "").Trim().ToUpper(),
+                        Synonym                 = (d.Synonym ?? "").Trim(),
+                        Transcription           = (d.Transcription ?? "").Trim(),
+                        MostlyUsedTranslation   = primary,
+                        OtherTranslation        = secondary,
+                        ExampleUsage            = (d.ExampleUsage ?? "").Trim(),
+                        ExampleUsageTranslation = (d.ExampleUsageTranslation ?? "").Trim()
+                    };
                 })
                 .Where(p => !string.IsNullOrEmpty(p.Word))
                 .ToList();
@@ -133,6 +149,47 @@ public sealed class ClaudeService : IAiService
         {
             return [];
         }
+    }
+
+    /// Splits a potentially multi-valued translation string into primary and secondary parts.
+    /// If AI returns "виснажливий; також: виснажуючий" or "закоханість, сліпа захопленість"
+    /// the first part becomes MostlyUsedTranslation, the second becomes OtherTranslation (only for B2+).
+    private static (string primary, string? secondary) SplitTranslation(string mostly, string other, string level)
+    {
+        // Normalise separators the AI commonly uses
+        var separators = new[] { ";", ", також:", " також:", ",також:", " також " };
+        string primary = mostly;
+        string? secondary = string.IsNullOrWhiteSpace(other) ? null : other;
+
+        // If mostly_used_translation contains a separator, split it
+        foreach (var sep in separators)
+        {
+            var idx = mostly.IndexOf(sep, StringComparison.OrdinalIgnoreCase);
+            if (idx > 0)
+            {
+                primary = mostly[..idx].Trim();
+                var tail = mostly[(idx + sep.Length)..].Trim().TrimStart(':').Trim();
+                // Only promote to OtherTranslation for B2+, and only if other was not already set
+                if (secondary is null && IsHighLevel(level) && !string.IsNullOrWhiteSpace(tail))
+                    secondary = tail;
+                break;
+            }
+        }
+
+        // If secondary contains separators itself, keep only the first part
+        if (secondary is not null)
+        {
+            foreach (var sep in separators)
+            {
+                var idx = secondary.IndexOf(sep, StringComparison.OrdinalIgnoreCase);
+                if (idx > 0) { secondary = secondary[..idx].Trim(); break; }
+            }
+        }
+
+        // Enforce: null for non-high levels
+        if (!IsHighLevel(level)) secondary = null;
+
+        return (primary, string.IsNullOrWhiteSpace(secondary) ? null : secondary);
     }
 
     private async Task<string> SendAsync(string systemPrompt, string userMessage)
