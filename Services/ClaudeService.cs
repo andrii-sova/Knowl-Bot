@@ -202,10 +202,6 @@ public sealed class ClaudeService : IAiService
         return (primary, string.IsNullOrWhiteSpace(secondary) ? null : secondary);
     }
 
-    // claude-haiku-4-5 pricing per million tokens
-    private const double InputCostPerMToken  = 0.80;
-    private const double OutputCostPerMToken = 4.00;
-
     private async Task<string> SendAsync(string systemPrompt, string userMessage)
     {
         var message = await _client.Messages.Create(new()
@@ -218,14 +214,6 @@ public sealed class ClaudeService : IAiService
                 new() { Role = Role.User, Content = userMessage }
             }
         });
-
-        var u = message.Usage;
-        double cost = (u.InputTokens  * InputCostPerMToken +
-                       u.OutputTokens * OutputCostPerMToken)
-                      / 1_000_000.0;
-
-        Console.WriteLine(
-            $"[WARNING] Claude cost: ${cost:F6} | in={u.InputTokens} out={u.OutputTokens}");
 
         foreach (var block in message.Content)
         {
