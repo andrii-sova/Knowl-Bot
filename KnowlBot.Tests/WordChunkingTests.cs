@@ -164,8 +164,8 @@ public class WordChunkingTests
             chatId: ChatId,
             ct: default);
 
-        // 1 notice + 2 word chunks + 1 topic question = 4 total SendMessage calls
-        MessagesSent().Should().Be(4);
+        // 1 notice (deleted) + 1 combined expandable message = 2 total SendMessage calls
+        MessagesSent().Should().Be(2);
     }
 
     [Fact]
@@ -183,8 +183,8 @@ public class WordChunkingTests
             chatId: ChatId,
             ct: default);
 
-        // 1 notice + 1 word chunk + 1 topic question = 3
-        MessagesSent().Should().Be(3);
+        // 1 notice (deleted) + 1 combined expandable message = 2 total SendMessage calls
+        MessagesSent().Should().Be(2);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
