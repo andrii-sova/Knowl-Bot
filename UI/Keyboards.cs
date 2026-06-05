@@ -72,6 +72,16 @@ public static class Keyboards
         }
     });
 
+    public static InlineKeyboardButton[][] TopicChoiceActionRows() => new[]
+    {
+        new[]
+        {
+            InlineKeyboardButton.WithCallbackData("🤖 Auto-detect", "topic_auto"),
+            InlineKeyboardButton.WithCallbackData("✏️ Specify",     "topic_specify"),
+            InlineKeyboardButton.WithCallbackData("⏭ Skip",         "topic_skip")
+        }
+    };
+
     public static InlineKeyboardMarkup StudentList(IEnumerable<User> students, string callbackPrefix) => new(
         students
             .Select(student => new[]

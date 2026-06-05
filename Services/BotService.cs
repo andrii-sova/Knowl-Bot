@@ -241,7 +241,7 @@ public sealed class BotService(
         data.StartsWith("delwords_") ||
         data is "menu_delete_words" or "delwords_level" or "delwords_pick_delete" or "delwords_pick_keep";
 
-    private static bool IsWordEntryCallback(string data) => data.StartsWith("topic_");
+    private static bool IsWordEntryCallback(string data) => data.StartsWith("topic_") || data.StartsWith("wentry_");
 
     private static bool IsQuizCallback(string data) =>
         data is "menu_quiz" or "menu_mistakes" || data.StartsWith("quiz_");

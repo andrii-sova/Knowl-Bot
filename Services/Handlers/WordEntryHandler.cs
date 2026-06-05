@@ -15,13 +15,46 @@ public sealed class WordEntryHandler(
 {
     private IAiService OpenAi { get; } = openAi;
 
-    public Task HandleCallbackAsync(string data, long userId, long chatId, CancellationToken ct) => data switch
+    public Task HandleCallbackAsync(string data, long userId, long chatId, CancellationToken ct)
     {
-        "topic_auto" => HandleTopicAutoAsync(userId, chatId, ct),
-        "topic_specify" => HandleTopicSpecifyAsync(userId, chatId, ct),
-        "topic_skip" => HandleTopicSkipAsync(userId, chatId, ct),
-        _ => Task.CompletedTask
-    };
+        if (data.StartsWith("wentry_") && int.TryParse(data["wentry_".Length..], out var idx))
+            return HandleWordExpandAsync(userId, chatId, idx, ct);
+
+        return data switch
+        {
+            "topic_auto" => HandleTopicAutoAsync(userId, chatId, ct),
+            "topic_specify" => HandleTopicSpecifyAsync(userId, chatId, ct),
+            "topic_skip" => HandleTopicSkipAsync(userId, chatId, ct),
+            _ => Task.CompletedTask
+        };
+    }
+
+    private async Task HandleWordExpandAsync(long userId, long chatId, int idx, CancellationToken ct)
+    {
+        var state = GetState(userId);
+        if (state.ActiveWordMessageId == 0 || state.ActiveWordLines.Count == 0) return;
+
+        MutateState(userId, s =>
+        {
+            if (s.ExpandedWordIndices.Contains(idx)) s.ExpandedWordIndices.Remove(idx);
+            else s.ExpandedWordIndices.Add(idx);
+        });
+
+        state = GetState(userId);
+        var body = BuildExpandableBody(state.ActiveWordLines, state.ExpandedWordIndices);
+        var text = $"{state.ActiveWordHeader}\n\n{body}\n\n🏷️ Add a topic to these words?";
+
+        try
+        {
+            await Bot.EditMessageText(
+                chatId,
+                state.ActiveWordMessageId,
+                text,
+                replyMarkup: Keyboards.ExpandableWordKeyboard(state.ActiveWordLines.Count, state.ExpandedWordIndices, "wentry_", Keyboards.TopicChoiceActionRows()),
+                cancellationToken: ct);
+        }
+        catch { }
+    }
 
     public async Task HandleWordsInputAsync(long addedById, long forStudentId, string inputText, long chatId, CancellationToken ct)
     {
@@ -67,9 +100,22 @@ public sealed class WordEntryHandler(
             PendingForStudentId = forStudentId
         });
 
-        var lines = entries.Select(WordFormatter.FormatPendingLine).ToList();
-        await SendWordListAsync(chatId, lines, ct);
-        await Bot.SendMessage(chatId, "🏷️ Add a topic to these words?", replyMarkup: Keyboards.TopicChoice(), cancellationToken: ct);
+        var displayEntries = entries.Select(WordFormatter.ToDisplayEntry).ToList();
+        var body = string.Join("\n\n", displayEntries.Select((e, i) => $"{i + 1}. {e.CompactLine}"));
+        var msg = await Bot.SendMessage(
+            chatId,
+            $"📝 {entries.Count} word(s) enriched:\n\n{body}\n\n🏷️ Add a topic to these words?",
+            replyMarkup: Keyboards.ExpandableWordKeyboard(displayEntries.Count, new HashSet<int>(), "wentry_", Keyboards.TopicChoiceActionRows()),
+            cancellationToken: ct);
+
+        MutateState(addedById, s =>
+        {
+            s.ActiveWordLines = displayEntries;
+            s.ActiveWordHeader = $"📝 {entries.Count} word(s) enriched:";
+            s.ActiveWordContext = "entry";
+            s.ExpandedWordIndices = new();
+            s.ActiveWordMessageId = msg.MessageId;
+        });
     }
 
     public async Task HandleTopicAutoAsync(long userId, long chatId, CancellationToken ct)
