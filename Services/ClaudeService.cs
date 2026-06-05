@@ -35,12 +35,14 @@ public sealed class ClaudeService : IAiService
         "'It's raining cats and dogs' → 'ллє як із відра'. " +
         "Always ask yourself: what does a native speaker actually mean when they say this?\n\n" +
         "Return ONLY a minified JSON array (no spaces/indentation). Each object must have EXACTLY these fields:\n" +
-        "{\"w\":\"word/phrase (lowercase)\",\"l\":\"A1|A2|B1|B2|C1|C2\",\"s\":\"ONE synonym — single word — NO commas\",\"tr\":\"IPA no brackets e.g. dɪˈmɪnɪʃ\",\"m\":\"ONE primary Ukrainian equivalent — no commas\",\"o\":null or \"ONE secondary Ukrainian meaning — B2/C1/C2 only if genuinely different — else null\",\"ex\":\"max 6 words\",\"et\":\"Ukrainian translation of example\"}\n\n" +
+        "{\"w\":\"word/phrase (lowercase)\",\"l\":\"A1|A2|B1|B2|C1|C2\",\"s\":\"ONE English synonym — single word — null for A1/A2/B1\",\"tr\":\"IPA no brackets e.g. dɪˈmɪnɪʃ\",\"m\":\"ONE primary Ukrainian equivalent — no commas\",\"o\":null or \"ONE secondary Ukrainian meaning — B2/C1/C2 only if genuinely different — else null\",\"ex\":\"max 6 words\",\"et\":\"Ukrainian translation of example\"}\n\n" +
         "Rules:\n" +
         "- Use Cambridge Dictionary as the authoritative reference\n" +
         "- For idioms/slang/phrasal expressions: translate the idiomatic meaning, not the literal words\n" +
         "- Translations MUST be in standard literary Ukrainian — NEVER use Russian or русизми\n" +
         "- m MUST be a single word or short phrase — NEVER list alternatives\n" +
+        "- s MUST be null for A1/A2/B1 words — no exceptions\n" +
+        "- s MUST be a single English word for B2/C1/C2 — NO commas, NO alternatives\n" +
         "- o MUST be null for A1/A2/B1 — no exceptions\n" +
         "- o MUST be null if it's just a synonym of m\n" +
         "- o MUST be Ukrainian ONLY — NEVER English — null if you cannot provide a genuinely different Ukrainian meaning\n" +
@@ -99,7 +101,7 @@ public sealed class ClaudeService : IAiService
             $"You specialize in authentic, idiomatic translation — not literal word-for-word equivalents.\n" +
             $"Generate exactly {count} English words or phrases at CEFR level {level}.{topicClause}\n\n" +
             $"Return ONLY a minified JSON array (no spaces/indentation). Each object must have EXACTLY these fields:\n" +
-            $"{{\"w\":\"word/phrase (lowercase)\",\"l\":\"{level}\",\"s\":\"ONE synonym — single word — NO commas\",\"tr\":\"IPA no brackets e.g. dɪˈmɪnɪʃ\",\"m\":\"ONE primary Ukrainian equivalent — no commas\",\"o\":{(IsHighLevel(level) ? "null or \"ONE secondary Ukrainian meaning — only if genuinely different — else null\"" : "null")},\"ex\":\"max 6 words\"{(IsHighLevel(level) ? "" : ",\\\"et\\\":\\\"Ukrainian translation of example\\\"")}  }}\n\n" +
+            $"{{\"w\":\"word/phrase (lowercase)\",\"l\":\"{level}\",\"s\":{(IsHighLevel(level) ? "\"ONE English synonym — single word — NO commas\"" : "null")},\"tr\":\"IPA no brackets e.g. dɪˈmɪnɪʃ\",\"m\":\"ONE primary Ukrainian equivalent — no commas\",\"o\":{(IsHighLevel(level) ? "null or \"ONE secondary Ukrainian meaning — only if genuinely different — else null\"" : "null")},\"ex\":\"max 6 words\"{(IsHighLevel(level) ? "" : ",\\\"et\\\":\\\"Ukrainian translation of example\\\"")}  }}\n\n" +
             $"Rules:\n" +
             $"- Choose natural, useful everyday words a learner at {level} would need\n" +
             $"- For idioms/slang/phrasal expressions: translate the idiomatic meaning, not literal words\n" +
@@ -107,10 +109,12 @@ public sealed class ClaudeService : IAiService
             $"- Translations MUST be in standard literary Ukrainian — NEVER use Russian or русизми\n" +
             $"- m MUST be a single word or short phrase — NEVER list alternatives\n" +
             (IsHighLevel(level)
-                ? "- o is ONLY for a genuinely different second Ukrainian meaning — null if it's a synonym of m\n" +
+                ? "- s MUST be a single English word — NO commas, NO alternatives\n" +
+                  "- o is ONLY for a genuinely different second Ukrainian meaning — null if it's a synonym of m\n" +
                   "- o MUST be Ukrainian ONLY — NEVER English — null if no genuinely different Ukrainian meaning exists\n" +
                   "- Do NOT include et field\n"
-                : "- o MUST be null — no exceptions for this level\n" +
+                : "- s MUST be null — no exceptions for this level\n" +
+                  "- o MUST be null — no exceptions for this level\n" +
                   "- et MUST be a Ukrainian string — NEVER null or missing\n") +
             $"- Output ONLY the JSON array{excludeClause}";
 
