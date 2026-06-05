@@ -52,7 +52,7 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
                 await ConfirmStudentGenAsync(userId, chatId, ct);
                 break;
             case "sgen_cancel":
-                MutateState(userId, s => { s.GenLevel = null; s.GenCount = 0; s.GenTopic = null; s.GenPreview = new(); s.State = UserState.None; });
+                MutateState(userId, s => { s.GenSelectedLevels = new(); s.GenLevelMessageId = 0; s.GenCount = 0; s.GenTopic = null; s.GenPreview = new(); s.State = UserState.None; });
                 await GoMenuAsync(userId, chatId, ct);
                 break;
             case "sgen_remove":
@@ -104,9 +104,13 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
                 {
                     await HandleVocabPageAsync(userId, chatId, -1, ct);
                 }
-                else if (data.StartsWith("sgen_level_"))
+                else if (data.StartsWith("sgen_level_toggle_"))
                 {
-                    await HandleStudentGenLevelAsync(userId, chatId, data["sgen_level_".Length..], ct);
+                    await HandleStudentGenLevelToggleAsync(userId, chatId, data["sgen_level_toggle_".Length..], ct);
+                }
+                else if (data == "sgen_level_done")
+                {
+                    await HandleStudentGenLevelDoneAsync(userId, chatId, ct);
                 }
                 else if (data.StartsWith("sgen_count_"))
                 {
@@ -265,21 +269,48 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
 
     private async Task StartStudentGenAsync(long userId, long chatId, CancellationToken ct)
     {
-        MutateState(userId, s => { s.State = UserState.None; s.GenLevel = null; s.GenCount = 0; s.GenTopic = null; s.GenPreview = new(); });
-        await Bot.SendMessage(
+        MutateState(userId, s => { s.State = UserState.None; s.GenSelectedLevels = new(); s.GenLevelMessageId = 0; s.GenCount = 0; s.GenTopic = null; s.GenPreview = new(); });
+
+        var msg = await Bot.SendMessage(
             chatId,
-            "🤖 *Generate by Level*\n\nSelect the CEFR level:",
+            "🤖 *Generate by Level*\n\nSelect one or more CEFR levels (tap to toggle), then press Done:",
             parseMode: ParseMode.Markdown,
-            replyMarkup: Keyboards.CefrLevelButtons("sgen_level_"),
+            replyMarkup: Keyboards.CefrLevelMultiSelectButtons(new HashSet<string>(), "sgen_level_toggle_", "sgen_level_done", "sgen_cancel"),
             cancellationToken: ct);
+
+        MutateState(userId, s => s.GenLevelMessageId = msg.MessageId);
     }
 
-    private async Task HandleStudentGenLevelAsync(long userId, long chatId, string level, CancellationToken ct)
+    private async Task HandleStudentGenLevelToggleAsync(long userId, long chatId, string level, CancellationToken ct)
     {
-        MutateState(userId, s => { s.GenLevel = level == "any" ? null : level; s.GenCount = 0; s.GenTopic = null; s.GenPreview = new(); });
+        var state = GetState(userId);
+        if (state.GenLevelMessageId == 0) return;
+
+        MutateState(userId, s =>
+        {
+            if (s.GenSelectedLevels.Contains(level)) s.GenSelectedLevels.Remove(level);
+            else s.GenSelectedLevels.Add(level);
+        });
+
+        var updated = GetState(userId);
+        var selected = new HashSet<string>(updated.GenSelectedLevels);
+        try
+        {
+            await Bot.EditMessageReplyMarkup(
+                chatId, updated.GenLevelMessageId,
+                replyMarkup: Keyboards.CefrLevelMultiSelectButtons(selected, "sgen_level_toggle_", "sgen_level_done", "sgen_cancel"),
+                cancellationToken: ct);
+        }
+        catch { }
+    }
+
+    private async Task HandleStudentGenLevelDoneAsync(long userId, long chatId, CancellationToken ct)
+    {
+        MutateState(userId, s => { s.GenCount = 0; s.GenTopic = null; s.GenPreview = new(); s.GenLevelMessageId = 0; });
+        var state = GetState(userId);
         await Bot.SendMessage(
             chatId,
-            $"📦 How many *{level}* words would you like to generate?",
+            $"📦 How many *{state.GenLevelDisplay}* words would you like to generate?",
             parseMode: ParseMode.Markdown,
             replyMarkup: Keyboards.SGenCountButtons(),
             cancellationToken: ct);
@@ -289,7 +320,7 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
     {
         if (!int.TryParse(raw, out var count)) return;
         MutateState(userId, s => { s.State = UserState.AwaitingStudentGenTopic; s.GenCount = count; s.GenTopic = null; s.GenPreview = new(); });
-        var level = GetState(userId).GenLevel ?? "any";
+        var level = GetState(userId).GenLevelDisplay;
         await Bot.SendMessage(
             chatId,
             $"🏷️ Enter a topic for the *{level}* words _(optional)_.\n\n_e.g. Business English, Travel, Phrasal Verbs_",
@@ -307,7 +338,7 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
     private async Task GenerateStudentPreviewAsync(long userId, long chatId, CancellationToken ct)
     {
         var state = GetState(userId);
-        if (string.IsNullOrWhiteSpace(state.GenLevel) || state.GenCount <= 0)
+        if (state.GenCount <= 0)
         {
             await StartStudentGenAsync(userId, chatId, ct);
             return;
@@ -316,8 +347,8 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
         var notice = await Bot.SendMessage(chatId, "⏳ Generating…", cancellationToken: ct);
         try
         {
-            var existingWords = await Db.GetAllWordOriginalsAsync(userId);
-            var generated = await openAi.GenerateWordsByLevelAsync(state.GenLevel, state.GenCount, state.GenTopic, existingWords);
+            var existingWords = (await Db.GetAllWordOriginalsAsync(userId)).ToList();
+            var generated = await GenerateForLevelsAsync(state.GenSelectedLevels, state.GenCount, state.GenTopic, existingWords);
             var preview = generated;
 
             MutateState(userId, s => { s.State = UserState.None; s.GenPreview = preview; });
@@ -348,7 +379,7 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
     {
         var state = GetState(userId);
         var topicNote = state.GenTopic is not null ? $" · {state.GenTopic}" : string.Empty;
-        var header = $"🤖 {state.GenPreview.Count} {state.GenLevel} words{topicNote}:";
+        var header = $"🤖 {state.GenPreview.Count} {state.GenLevelDisplay} words{topicNote}:";
         var body = string.Join("\n\n", state.GenPreview.Select(WordFormatter.FormatPendingLine));
 
         await Bot.SendMessage(
@@ -361,7 +392,7 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
     private async Task ConfirmStudentGenAsync(long userId, long chatId, CancellationToken ct)
     {
         var state = GetState(userId);
-        if (state.GenPreview.Count == 0 || string.IsNullOrWhiteSpace(state.GenLevel))
+        if (state.GenPreview.Count == 0)
         {
             await GoMenuAsync(userId, chatId, ct);
             return;
@@ -376,7 +407,7 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
             batchId);
 
         var savedCount = state.GenPreview.Count;
-        MutateState(userId, s => { s.GenLevel = null; s.GenCount = 0; s.GenTopic = null; s.GenPreview = new(); });
+        MutateState(userId, s => { s.GenSelectedLevels = new(); s.GenLevelMessageId = 0; s.GenCount = 0; s.GenTopic = null; s.GenPreview = new(); });
 
         await Bot.SendMessage(
             chatId,
@@ -385,6 +416,37 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
             cancellationToken: ct);
 
         await GoMenuAsync(userId, chatId, ct);
+    }
+
+    private async Task<List<PendingWordEntry>> GenerateForLevelsAsync(
+        List<string> levels, int totalCount, string? topic, List<string> existingWords)
+    {
+        if (levels.Count <= 1)
+        {
+            var level = levels.Count == 1 ? levels[0] : "any";
+            return await openAi.GenerateWordsByLevelAsync(level, totalCount, topic, existingWords);
+        }
+
+        var result = new List<PendingWordEntry>();
+        var exclusions = existingWords.ToList();
+        var baseCount  = totalCount / levels.Count;
+        var remainder  = totalCount % levels.Count;
+
+        var ordered = new[] { "A1", "A2", "B1", "B2", "C1", "C2" }
+            .Where(levels.Contains)
+            .ToList();
+
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            var perLevel = baseCount + (i < remainder ? 1 : 0);
+            if (perLevel <= 0) continue;
+
+            var words = await openAi.GenerateWordsByLevelAsync(ordered[i], perLevel, topic, exclusions);
+            result.AddRange(words);
+            exclusions.AddRange(words.Select(w => w.Word));
+        }
+
+        return result;
     }
 
     private async Task HandleStudentGenRemoveAsync(long userId, long chatId, CancellationToken ct)

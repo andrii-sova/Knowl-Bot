@@ -115,6 +115,25 @@ public static class Keyboards
                 .ToArray());
     }
 
+    public static InlineKeyboardMarkup CefrLevelMultiSelectButtons(
+        IReadOnlySet<string> selected, string togglePrefix, string doneCallback, string cancelCallback)
+    {
+        var buttons = WordFormatter.CefrLevels
+            .Select(level => InlineKeyboardButton.WithCallbackData(
+                selected.Contains(level) ? $"✅ {level}" : level,
+                $"{togglePrefix}{level}"))
+            .ToArray();
+
+        var doneLabel = selected.Count > 0 ? $"Done ({selected.Count} selected)" : "Any level";
+
+        return new InlineKeyboardMarkup(
+            buttons.Chunk(3)
+                .Select(row => row)
+                .Append(new[] { InlineKeyboardButton.WithCallbackData($"✅ {doneLabel}", doneCallback) })
+                .Append(new[] { InlineKeyboardButton.WithCallbackData("❌ Cancel", cancelCallback) })
+                .ToArray());
+    }
+
     public static InlineKeyboardMarkup SendWordChoice() => new(new[]
     {
         new[] { InlineKeyboardButton.WithCallbackData("✍️ Type Words",        "type_words") },

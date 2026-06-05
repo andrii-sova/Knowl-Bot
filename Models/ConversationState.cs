@@ -70,8 +70,20 @@ public sealed class ConversationState
     public int BrowsingGroupIdx { get; set; }
     public int BrowsingOffset { get; set; }
 
-    public string? GenLevel { get; set; }
+    public List<string> GenSelectedLevels { get; set; } = new();
+    public int GenLevelMessageId { get; set; }
     public int GenCount { get; set; }
     public string? GenTopic { get; set; }
     public List<PendingWordEntry> GenPreview { get; set; } = new();
+
+    /// Levels sorted in CEFR order; "Any" when none selected.
+    public string GenLevelDisplay
+    {
+        get
+        {
+            if (GenSelectedLevels.Count == 0) return "Any";
+            var order = new[] { "A1", "A2", "B1", "B2", "C1", "C2" };
+            return string.Join(", ", order.Where(GenSelectedLevels.Contains));
+        }
+    }
 }
