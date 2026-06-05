@@ -159,16 +159,51 @@ public static class Keyboards
         new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back",       "gen_start") }
     });
 
-    public static InlineKeyboardMarkup GenPreviewButtons() => new(new[]
+    public static InlineKeyboardMarkup ExpandableWordKeyboard(
+        int wordCount,
+        IReadOnlySet<int> expanded,
+        string togglePrefix,
+        InlineKeyboardButton[][]? actionRows = null)
     {
-        new[]
-        {
-            InlineKeyboardButton.WithCallbackData("✅ Confirm",     "gen_confirm"),
-            InlineKeyboardButton.WithCallbackData("🔄 Regenerate", "gen_retry"),
-            InlineKeyboardButton.WithCallbackData("⬅️ Back",        "gen_start")
-        },
+        const int buttonsPerRow = 5;
+        var rows = Enumerable.Range(0, wordCount)
+            .Chunk(buttonsPerRow)
+            .Select(chunk => chunk.Select(i => InlineKeyboardButton.WithCallbackData(
+                expanded.Contains(i) ? $"{i + 1}✕" : $"{i + 1}≡", $"{togglePrefix}{i}")).ToArray())
+            .ToList<InlineKeyboardButton[]>();
+
+        if (actionRows is not null)
+            rows.AddRange(actionRows);
+
+        return new InlineKeyboardMarkup(rows);
+    }
+
+    public static InlineKeyboardButton[][] GenPreviewActionRows() => new[]
+    {
+        new[] { InlineKeyboardButton.WithCallbackData("✅ Confirm", "gen_confirm"), InlineKeyboardButton.WithCallbackData("🔄 Regenerate", "gen_retry"), InlineKeyboardButton.WithCallbackData("⬅️ Back", "gen_start") },
         new[] { InlineKeyboardButton.WithCallbackData("✂️ Remove Words", "gen_remove") }
-    });
+    };
+
+    public static InlineKeyboardButton[][] SGenPreviewActionRows() => new[]
+    {
+        new[] { InlineKeyboardButton.WithCallbackData("✅ Save", "sgen_confirm"), InlineKeyboardButton.WithCallbackData("🔄 Regenerate", "sgen_retry"), InlineKeyboardButton.WithCallbackData("⬅️ Back", "sgen_start") },
+        new[] { InlineKeyboardButton.WithCallbackData("✂️ Remove Words", "sgen_remove") }
+    };
+
+    public static InlineKeyboardButton[][] VocabPageActionRows(int currentPage, int totalPages)
+    {
+        var rows = new List<InlineKeyboardButton[]>();
+        var nav = new List<InlineKeyboardButton>();
+        if (currentPage > 0) nav.Add(InlineKeyboardButton.WithCallbackData("◀️ Prev", "vocab_page_prev"));
+        if (currentPage < totalPages - 1) nav.Add(InlineKeyboardButton.WithCallbackData("▶️ Next", "vocab_page_next"));
+        if (nav.Count > 0) rows.Add(nav.ToArray());
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Menu", "back_to_menu") });
+        return rows.ToArray();
+    }
+
+    public static InlineKeyboardMarkup GenPreviewButtons() => new(GenPreviewActionRows());
+
+    public static InlineKeyboardMarkup SGenPreviewButtons() => new(SGenPreviewActionRows());
 
     public static InlineKeyboardMarkup PoolCountButtons() => new(new[]
     {
@@ -225,17 +260,8 @@ public static class Keyboards
         return new(rows.ToArray());
     }
 
-    public static InlineKeyboardMarkup VocabPageNavigation(int currentPage, int totalPages)
-    {
-        var nav = new List<InlineKeyboardButton>();
-        if (currentPage > 0) nav.Add(InlineKeyboardButton.WithCallbackData("◀️ Prev", "vocab_page_prev"));
-        if (currentPage < totalPages - 1) nav.Add(InlineKeyboardButton.WithCallbackData("▶️ Next", "vocab_page_next"));
-
-        var rows = new List<InlineKeyboardButton[]>();
-        if (nav.Count > 0) rows.Add(nav.ToArray());
-        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Menu", "back_to_menu") });
-        return new(rows.ToArray());
-    }
+    public static InlineKeyboardMarkup VocabPageNavigation(int currentPage, int totalPages) =>
+        new(VocabPageActionRows(currentPage, totalPages));
 
     public static InlineKeyboardMarkup ConfirmRemoveStudent(long studentId) => new(new[]
     {
@@ -336,17 +362,6 @@ public static class Keyboards
     {
         new[] { InlineKeyboardButton.WithCallbackData("⏭ Skip topic", "sgen_topic_skip") },
         new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back",       "sgen_start") }
-    });
-
-    public static InlineKeyboardMarkup SGenPreviewButtons() => new(new[]
-    {
-        new[]
-        {
-            InlineKeyboardButton.WithCallbackData("✅ Save",         "sgen_confirm"),
-            InlineKeyboardButton.WithCallbackData("🔄 Regenerate",  "sgen_retry"),
-            InlineKeyboardButton.WithCallbackData("⬅️ Back",         "sgen_start")
-        },
-        new[] { InlineKeyboardButton.WithCallbackData("✂️ Remove Words", "sgen_remove") }
     });
 
     public static InlineKeyboardMarkup PoolEmptyState() => new(new[]

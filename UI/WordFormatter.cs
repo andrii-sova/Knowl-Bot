@@ -47,7 +47,7 @@ public static class WordFormatter
         if (!string.IsNullOrWhiteSpace(w.Synonym))
             sb.Append($" ({w.Synonym})");
 
-        sb.Append(" - ");
+        sb.Append(" — ");
         sb.Append(w.MostlyUsedTranslation);
 
         if (!string.IsNullOrWhiteSpace(w.OtherTranslation))
@@ -64,6 +64,20 @@ public static class WordFormatter
         return sb.ToString();
     }
 
+    public static string FormatCompactLine(Word w)
+    {
+        var sb = new System.Text.StringBuilder();
+        if (!string.IsNullOrWhiteSpace(w.CefrLevel)) sb.Append($"[{w.CefrLevel}] ");
+        sb.Append(w.OriginalWord);
+        if (!string.IsNullOrWhiteSpace(w.Transcription)) sb.Append($" [{w.Transcription}]");
+        sb.Append(" — ");
+        sb.Append(w.MostlyUsedTranslation);
+        return sb.ToString();
+    }
+
+    public static WordDisplayEntry ToDisplayEntry(Word w) =>
+        new(FormatCompactLine(w), FormatWordLine(w));
+
     public static string FormatPendingLine(PendingWordEntry p)
     {
         var sb = new System.Text.StringBuilder();
@@ -79,7 +93,7 @@ public static class WordFormatter
         if (!string.IsNullOrWhiteSpace(p.Synonym))
             sb.Append($" ({p.Synonym})");
 
-        sb.Append(" - ");
+        sb.Append(" — ");
         sb.Append(p.MostlyUsedTranslation);
 
         if (!string.IsNullOrWhiteSpace(p.OtherTranslation))
@@ -95,6 +109,20 @@ public static class WordFormatter
 
         return sb.ToString();
     }
+
+    public static string FormatCompactLine(PendingWordEntry p)
+    {
+        var sb = new System.Text.StringBuilder();
+        if (!string.IsNullOrWhiteSpace(p.CefrLevel)) sb.Append($"[{p.CefrLevel}] ");
+        sb.Append(p.Word);
+        if (!string.IsNullOrWhiteSpace(p.Transcription)) sb.Append($" [{p.Transcription}]");
+        sb.Append(" — ");
+        sb.Append(p.MostlyUsedTranslation);
+        return sb.ToString();
+    }
+
+    public static WordDisplayEntry ToDisplayEntry(PendingWordEntry p) =>
+        new(FormatCompactLine(p), FormatPendingLine(p));
 
     public static string QuizQuestion(Word w, string direction) =>
         direction == "eu" ? w.OriginalWord : w.MostlyUsedTranslation ?? string.Empty;

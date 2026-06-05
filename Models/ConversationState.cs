@@ -1,5 +1,7 @@
 namespace KnowlBot.Models;
 
+public sealed record WordDisplayEntry(string CompactLine, string FullLine);
+
 public sealed record PendingWordEntry
 {
     public string  Word                    { get; init; } = "";
@@ -86,4 +88,11 @@ public sealed class ConversationState
             return string.Join(", ", order.Where(GenSelectedLevels.Contains));
         }
     }
+
+    // ── Expandable word message tracking ─────────────────────────────────────
+    public int ActiveWordMessageId { get; set; }
+    public string ActiveWordHeader { get; set; } = "";
+    public string ActiveWordContext { get; set; } = ""; // "gen" | "sgen" | "vocab"
+    public HashSet<int> ExpandedWordIndices { get; set; } = new();
+    public List<WordDisplayEntry> ActiveWordLines { get; set; } = new();
 }

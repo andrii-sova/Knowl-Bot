@@ -228,6 +228,7 @@ public sealed class BotService(
         data.StartsWith("send_to_") ||
         data.StartsWith("pool_") ||
         data.StartsWith("gen_") ||
+        data.StartsWith("gexp_") ||
         data.StartsWith("browse_") ||
         data.StartsWith("wfilter_") ||
         data.StartsWith("wmode_") ||
@@ -249,7 +250,8 @@ public sealed class BotService(
         data is "menu_add_words" or "menu_my_words" or "stype_words" ||
         data.StartsWith("vocab_") ||
         data.StartsWith("sgen_") ||
-        data.StartsWith("sfilter_");
+        data.StartsWith("sfilter_") ||
+        data.StartsWith("wexp_");
 
     private static string FullMessage(Exception ex)
     {

@@ -116,6 +116,11 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
                 {
                     await HandleStudentGenCountAsync(userId, chatId, data["sgen_count_".Length..], ct);
                 }
+                else if (data.StartsWith("wexp_"))
+                {
+                    if (int.TryParse(data["wexp_".Length..], out var idx))
+                        await HandleWordExpandAsync(userId, chatId, idx, ct);
+                }
                 break;
         }
     }
@@ -226,28 +231,49 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
             state.VocabHeader = header;
         });
 
-        await SendVocabPageAsync(userId, chatId, ct);
+        await SendVocabPageAsync(userId, chatId, ct, isNew: true);
     }
 
-    private async Task SendVocabPageAsync(long userId, long chatId, CancellationToken ct)
+    private async Task SendVocabPageAsync(long userId, long chatId, CancellationToken ct, bool isNew = false)
     {
         const int pageSize = 15;
         var state = GetState(userId);
         var words = state.VocabWords;
         var page = state.VocabPage;
         var totalPages = (int)Math.Ceiling(words.Count / (double)pageSize);
-
         var slice = words.Skip(page * pageSize).Take(pageSize).ToList();
-        var body = string.Join("\n\n", slice.Select(WordFormatter.FormatWordLine));
+
+        var entries = slice.Select(WordFormatter.ToDisplayEntry).ToList();
         var pageInfo = totalPages > 1
             ? $"\n\n(Page {page + 1}/{totalPages} · {words.Count} words)"
             : $"\n\n{words.Count} word{(words.Count == 1 ? "" : "s")}";
+        var header = state.VocabHeader;
 
-        await Bot.SendMessage(
-            chatId,
-            $"{state.VocabHeader}\n\n{body}{pageInfo}",
-            replyMarkup: Keyboards.VocabPageNavigation(page, totalPages),
-            cancellationToken: ct);
+        MutateState(userId, s =>
+        {
+            s.ActiveWordLines = entries;
+            s.ActiveWordHeader = header;
+            s.ActiveWordContext = "vocab";
+            s.ExpandedWordIndices = new();
+        });
+
+        var body = BuildExpandableBody(entries, new HashSet<int>());
+        var text = $"{header}\n\n{body}{pageInfo}";
+        var keyboard = Keyboards.ExpandableWordKeyboard(entries.Count, new HashSet<int>(), "wexp_", Keyboards.VocabPageActionRows(page, totalPages));
+
+        var existingMsgId = GetState(userId).ActiveWordMessageId;
+        if (!isNew && existingMsgId != 0)
+        {
+            try
+            {
+                await Bot.EditMessageText(chatId, existingMsgId, text, replyMarkup: keyboard, cancellationToken: ct);
+                return;
+            }
+            catch { }
+        }
+
+        var msg = await Bot.SendMessage(chatId, text, replyMarkup: keyboard, cancellationToken: ct);
+        MutateState(userId, s => s.ActiveWordMessageId = msg.MessageId);
     }
 
     private async Task HandleVocabPageAsync(long userId, long chatId, int delta, CancellationToken ct)
@@ -266,6 +292,51 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
     }
 
     // ── Student Generate by Level ────────────────────────────────────────────
+
+    private async Task HandleWordExpandAsync(long userId, long chatId, int idx, CancellationToken ct)
+    {
+        var state = GetState(userId);
+        if (state.ActiveWordMessageId == 0 || state.ActiveWordLines.Count == 0) return;
+
+        MutateState(userId, s =>
+        {
+            if (s.ExpandedWordIndices.Contains(idx)) s.ExpandedWordIndices.Remove(idx);
+            else s.ExpandedWordIndices.Add(idx);
+        });
+
+        state = GetState(userId);
+        var body = BuildExpandableBody(state.ActiveWordLines, state.ExpandedWordIndices);
+
+        string text;
+        InlineKeyboardButton[][] actionRows;
+
+        if (state.ActiveWordContext == "sgen")
+        {
+            text = $"{state.ActiveWordHeader}\n\n{body}";
+            actionRows = Keyboards.SGenPreviewActionRows();
+        }
+        else // vocab
+        {
+            const int pageSize = 15;
+            var totalPages = (int)Math.Ceiling(state.VocabWords.Count / (double)pageSize);
+            var pageInfo = totalPages > 1
+                ? $"\n\n(Page {state.VocabPage + 1}/{totalPages} · {state.VocabWords.Count} words)"
+                : $"\n\n{state.VocabWords.Count} word{(state.VocabWords.Count == 1 ? "" : "s")}";
+            text = $"{state.ActiveWordHeader}\n\n{body}{pageInfo}";
+            actionRows = Keyboards.VocabPageActionRows(state.VocabPage, totalPages);
+        }
+
+        try
+        {
+            await Bot.EditMessageText(
+                chatId,
+                state.ActiveWordMessageId,
+                text,
+                replyMarkup: Keyboards.ExpandableWordKeyboard(state.ActiveWordLines.Count, state.ExpandedWordIndices, "wexp_", actionRows),
+                cancellationToken: ct);
+        }
+        catch { }
+    }
 
     private async Task StartStudentGenAsync(long userId, long chatId, CancellationToken ct)
     {
@@ -378,15 +449,26 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
     private async Task ShowStudentGenPreviewAsync(long userId, long chatId, CancellationToken ct)
     {
         var state = GetState(userId);
+        var entries = state.GenPreview.Select(WordFormatter.ToDisplayEntry).ToList();
         var topicNote = state.GenTopic is not null ? $" · {state.GenTopic}" : string.Empty;
         var header = $"🤖 {state.GenPreview.Count} {state.GenLevelDisplay} words{topicNote}:";
-        var body = string.Join("\n\n", state.GenPreview.Select(WordFormatter.FormatPendingLine));
 
-        await Bot.SendMessage(
+        MutateState(userId, s =>
+        {
+            s.ActiveWordLines = entries;
+            s.ActiveWordHeader = header;
+            s.ActiveWordContext = "sgen";
+            s.ExpandedWordIndices = new();
+        });
+
+        var body = BuildExpandableBody(entries, new HashSet<int>());
+        var msg = await Bot.SendMessage(
             chatId,
             $"{header}\n\n{body}",
-            replyMarkup: Keyboards.SGenPreviewButtons(),
+            replyMarkup: Keyboards.ExpandableWordKeyboard(entries.Count, new HashSet<int>(), "wexp_", Keyboards.SGenPreviewActionRows()),
             cancellationToken: ct);
+
+        MutateState(userId, s => s.ActiveWordMessageId = msg.MessageId);
     }
 
     private async Task ConfirmStudentGenAsync(long userId, long chatId, CancellationToken ct)

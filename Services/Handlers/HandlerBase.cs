@@ -85,4 +85,7 @@ public abstract class HandlerBase(ITelegramBotClient bot, IDatabaseService db, C
 
     private static InlineKeyboardMarkup GetMenuMarkup(string role) =>
         role == "Teacher" ? Keyboards.TeacherMenu() : Keyboards.StudentMenu();
+
+    protected static string BuildExpandableBody(IReadOnlyList<WordDisplayEntry> lines, IReadOnlySet<int> expanded) =>
+        string.Join("\n\n", lines.Select((e, i) => $"{i + 1}. {(expanded.Contains(i) ? e.FullLine : e.CompactLine)}"));
 }

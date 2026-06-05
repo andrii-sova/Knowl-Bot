@@ -227,7 +227,42 @@ public sealed class TeacherHandler(
                 parseMode: ParseMode.Markdown,
                 replyMarkup: Keyboards.BackButton("back_to_menu"),
                 cancellationToken: ct);
+            return;
         }
+
+        if (data.StartsWith("gexp_"))
+        {
+            if (int.TryParse(data["gexp_".Length..], out var idx))
+                await HandleWordExpandAsync(userId, chatId, idx, ct);
+        }
+    }
+
+    private async Task HandleWordExpandAsync(long userId, long chatId, int idx, CancellationToken ct)
+    {
+        var state = GetState(userId);
+        if (state.ActiveWordMessageId == 0 || state.ActiveWordLines.Count == 0) return;
+
+        MutateState(userId, s =>
+        {
+            if (s.ExpandedWordIndices.Contains(idx)) s.ExpandedWordIndices.Remove(idx);
+            else s.ExpandedWordIndices.Add(idx);
+        });
+
+        state = GetState(userId);
+        var body = BuildExpandableBody(state.ActiveWordLines, state.ExpandedWordIndices);
+        var text = $"{state.ActiveWordHeader}\n\n{body}";
+
+        try
+        {
+            await Bot.EditMessageText(
+                chatId,
+                state.ActiveWordMessageId,
+                text,
+                parseMode: ParseMode.Markdown,
+                replyMarkup: Keyboards.ExpandableWordKeyboard(state.ActiveWordLines.Count, state.ExpandedWordIndices, "gexp_", Keyboards.GenPreviewActionRows()),
+                cancellationToken: ct);
+        }
+        catch { }
     }
 
     public async Task HandleGenTopicInputAsync(long userId, long chatId, string topic, CancellationToken ct)
@@ -601,15 +636,14 @@ public sealed class TeacherHandler(
         {
             var existingWords = (await Db.GetAllWordOriginalsAsync(state.SelectedStudentId.Value)).ToList();
             var generated = await GenerateForLevelsAsync(state.GenSelectedLevels, state.GenCount, state.GenTopic, existingWords);
-            var preview = generated;
 
-            MutateState(userId, currentState =>
+            MutateState(userId, s =>
             {
-                currentState.State = UserState.None;
-                currentState.GenPreview = preview;
+                s.State = UserState.None;
+                s.GenPreview = generated;
             });
 
-            if (preview.Count == 0)
+            if (generated.Count == 0)
             {
                 await Bot.SendMessage(
                     chatId,
@@ -623,21 +657,12 @@ public sealed class TeacherHandler(
                 return;
             }
 
-            var student = await Db.GetUserAsync(state.SelectedStudentId.Value);
-            var topicNote = state.GenTopic is not null ? $" · 🏷️ _{WordFormatter.EscapeMarkdown(state.GenTopic)}_" : string.Empty;
-            var header = $"🤖 *{preview.Count} {state.GenLevelDisplay} words* for *{WordFormatter.EscapeMarkdown(student?.DisplayName ?? string.Empty)}*{topicNote}:";
-            await SendWordListAsync(chatId, preview.Select(WordFormatter.FormatPendingLine).ToList(), ct,
-                header: header, finalMarkup: Keyboards.GenPreviewButtons());
+            await ShowGenPreviewAsync(userId, chatId, ct);
         }
         finally
         {
-            try
-            {
-                await Bot.DeleteMessage(chatId, notice.MessageId, cancellationToken: ct);
-            }
-            catch
-            {
-            }
+            try { await Bot.DeleteMessage(chatId, notice.MessageId, cancellationToken: ct); }
+            catch { }
         }
     }
 
@@ -711,14 +736,34 @@ public sealed class TeacherHandler(
     }
 
     private async Task GenerateAndShowExistingPreviewAsync(long userId, long chatId, CancellationToken ct)
+        => await ShowGenPreviewAsync(userId, chatId, ct);
+
+    private async Task ShowGenPreviewAsync(long userId, long chatId, CancellationToken ct)
     {
         var state = GetState(userId);
         var student = await Db.GetUserAsync(state.SelectedStudentId!.Value);
         var topicNote = state.GenTopic is not null ? $" · 🏷️ _{WordFormatter.EscapeMarkdown(state.GenTopic)}_" : string.Empty;
         var header = $"🤖 *{state.GenPreview.Count} {state.GenLevelDisplay} words* for *{WordFormatter.EscapeMarkdown(student?.DisplayName ?? string.Empty)}*{topicNote}:";
 
-        await SendWordListAsync(chatId, state.GenPreview.Select(WordFormatter.FormatPendingLine).ToList(), ct,
-            header: header, finalMarkup: Keyboards.GenPreviewButtons());
+        var entries = state.GenPreview.Select(WordFormatter.ToDisplayEntry).ToList();
+
+        MutateState(userId, s =>
+        {
+            s.ActiveWordLines = entries;
+            s.ActiveWordHeader = header;
+            s.ActiveWordContext = "gen";
+            s.ExpandedWordIndices = new();
+        });
+
+        var body = BuildExpandableBody(entries, new HashSet<int>());
+        var msg = await Bot.SendMessage(
+            chatId,
+            $"{header}\n\n{body}",
+            parseMode: ParseMode.Markdown,
+            replyMarkup: Keyboards.ExpandableWordKeyboard(entries.Count, new HashSet<int>(), "gexp_", Keyboards.GenPreviewActionRows()),
+            cancellationToken: ct);
+
+        MutateState(userId, s => s.ActiveWordMessageId = msg.MessageId);
     }
 
     private async Task ConfirmGenPreviewAsync(long userId, long chatId, CancellationToken ct)
