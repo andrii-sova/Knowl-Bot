@@ -41,7 +41,7 @@ public sealed class WordEntryHandler(
         });
 
         state = GetState(userId);
-        var body = BuildExpandableBody(state.ActiveWordLines, state.ExpandedWordIndices);
+        var body = BuildExpandableBody(state.ActiveWordLines, state.ExpandedWordIndices, state.WordsExpandedByDefault);
         var text = $"{state.ActiveWordHeader}\n\n{body}\n\n🏷️ Add a topic to these words?";
 
         try
@@ -101,11 +101,14 @@ public sealed class WordEntryHandler(
         });
 
         var displayEntries = entries.Select(WordFormatter.ToDisplayEntry).ToList();
-        var body = string.Join("\n\n", displayEntries.Select((e, i) => $"{i + 1}. {e.CompactLine}"));
+        var user = await Db.GetUserAsync(addedById);
+        var expandByDefault = user?.Settings.WordsExpandedByDefault ?? false;
+        var expanded = InitialExpandedSet(displayEntries.Count, expandByDefault);
+        var body = BuildExpandableBody(displayEntries, expanded, expandByDefault);
         var msg = await Bot.SendMessage(
             chatId,
             $"📝 {entries.Count} word(s) enriched:\n\n{body}\n\n🏷️ Add a topic to these words?",
-            replyMarkup: Keyboards.ExpandableWordKeyboard(displayEntries.Count, new HashSet<int>(), "wentry_", Keyboards.TopicChoiceActionRows()),
+            replyMarkup: Keyboards.ExpandableWordKeyboard(displayEntries.Count, expanded, "wentry_", Keyboards.TopicChoiceActionRows()),
             cancellationToken: ct);
 
         MutateState(addedById, s =>
@@ -113,7 +116,8 @@ public sealed class WordEntryHandler(
             s.ActiveWordLines = displayEntries;
             s.ActiveWordHeader = $"📝 {entries.Count} word(s) enriched:";
             s.ActiveWordContext = "entry";
-            s.ExpandedWordIndices = new();
+            s.ExpandedWordIndices = expanded;
+            s.WordsExpandedByDefault = expandByDefault;
             s.ActiveWordMessageId = msg.MessageId;
         });
     }

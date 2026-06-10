@@ -49,6 +49,31 @@ public sealed class RegistrationHandler(
             case "role_student":
                 await RegisterStudentAsync(from.Id, from, chatId, ct);
                 break;
+            case "menu_settings":
+            {
+                var user = await Db.GetUserAsync(from.Id);
+                await Bot.SendMessage(
+                    chatId,
+                    "⚙️ *Account Settings*",
+                    parseMode: ParseMode.Markdown,
+                    replyMarkup: Keyboards.AccountSettingsMenu(user?.Settings.WordsExpandedByDefault ?? false),
+                    cancellationToken: ct);
+                break;
+            }
+            case "settings_toggle_expand":
+            {
+                var user = await Db.GetUserAsync(from.Id);
+                var newValue = !(user?.Settings.WordsExpandedByDefault ?? false);
+                await Db.UpdateWordsExpandedDefaultAsync(from.Id, newValue);
+                await Bot.SendMessage(
+                    chatId,
+                    "⚙️ *Account Settings*",
+                    parseMode: ParseMode.Markdown,
+                    replyMarkup: Keyboards.AccountSettingsMenu(newValue),
+                    cancellationToken: ct);
+                break;
+            }
+            case "settings_set_name":
             case "menu_set_name":
                 await HandleSetNameCallbackAsync(from.Id, chatId, ct);
                 break;
@@ -69,13 +94,13 @@ public sealed class RegistrationHandler(
 
         await Db.UpdateDisplayNameAsync(userId, name);
         ResetState(userId);
+        var user = await Db.GetUserAsync(userId);
         await Bot.SendMessage(
             chatId,
             $"✅ Display name set to *{WordFormatter.EscapeMarkdown(name)}*!",
             parseMode: ParseMode.Markdown,
+            replyMarkup: Keyboards.AccountSettingsMenu(user?.Settings.WordsExpandedByDefault ?? false),
             cancellationToken: ct);
-
-        await GoMenuAsync(userId, chatId, ct);
     }
 
     public async Task HandleStudentUsernameInputAsync(long teacherId, long chatId, string input, CancellationToken ct)

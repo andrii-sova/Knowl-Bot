@@ -59,6 +59,9 @@ public class BotServiceRoutingTests
     [InlineData("role_teacher", true)]
     [InlineData("role_student", true)]
     [InlineData("menu_set_name", true)]
+    [InlineData("menu_settings", true)]
+    [InlineData("settings_set_name", true)]
+    [InlineData("settings_toggle_expand", true)]
     [InlineData("back_to_menu", true)]
     [InlineData("menu_quiz", false)]
     [InlineData("menu_add_student", false)]
@@ -97,7 +100,8 @@ public class BotServiceRoutingTests
     // ── Replicate the private static predicates from BotService ─────────────
 
     private static bool IsRegistrationCallback(string data) =>
-        data is "role_teacher" or "role_student" or "menu_set_name" or "back_to_menu";
+        data is "role_teacher" or "role_student" or "menu_set_name" or "menu_settings"
+             or "settings_set_name" or "settings_toggle_expand" or "back_to_menu";
 
     private static bool IsTeacherCallback(string data) =>
         data is "menu_add_student" or "back_from_add_student" or "menu_send_words" or "menu_my_students" or

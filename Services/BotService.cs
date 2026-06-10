@@ -220,7 +220,8 @@ public sealed class BotService(
     }
 
     private static bool IsRegistrationCallback(string data) =>
-        data is "role_teacher" or "role_student" or "menu_set_name" or "back_to_menu";
+        data is "role_teacher" or "role_student" or "menu_set_name" or "menu_settings"
+             or "settings_set_name" or "settings_toggle_expand" or "back_to_menu";
 
     private static bool IsTeacherCallback(string data) =>
         data is "menu_add_student" or "back_from_add_student" or "menu_send_words" or "menu_my_students" or

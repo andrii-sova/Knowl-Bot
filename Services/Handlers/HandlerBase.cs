@@ -86,6 +86,20 @@ public abstract class HandlerBase(ITelegramBotClient bot, IDatabaseService db, C
     private static InlineKeyboardMarkup GetMenuMarkup(string role) =>
         role == "Teacher" ? Keyboards.TeacherMenu() : Keyboards.StudentMenu();
 
-    protected static string BuildExpandableBody(IReadOnlyList<WordDisplayEntry> lines, IReadOnlySet<int> expanded) =>
-        string.Join("\n\n", lines.Select((e, i) => $"{i + 1}. {(expanded.Contains(i) ? e.FullLine : e.CompactLine)}"));
+    protected static string BuildExpandableBody(IReadOnlyList<WordDisplayEntry> lines, IReadOnlySet<int> expanded, bool expandedByDefault = false) =>
+        string.Join("\n\n", lines.Select((e, i) =>
+        {
+            var isExpanded = expanded.Contains(i);
+            // Only show icon when state differs from default
+            var icon = (isExpanded, expandedByDefault) switch
+            {
+                (true,  false) => "✅ ",  // expanded, but default is collapsed → highlight
+                (false, true)  => "⬜ ",  // collapsed, but default is expanded → highlight
+                _              => ""      // matches default → no icon
+            };
+            return $"{i + 1}. {icon}{(isExpanded ? e.FullLine : e.CompactLine)}";
+        }));
+
+    protected static HashSet<int> InitialExpandedSet(int count, bool expandByDefault) =>
+        expandByDefault ? new HashSet<int>(Enumerable.Range(0, count)) : new HashSet<int>();
 }

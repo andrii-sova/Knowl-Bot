@@ -29,7 +29,7 @@ public static class Keyboards
             InlineKeyboardButton.WithCallbackData("💪 Mistakes",    "menu_mistakes")
         },
         new[] { InlineKeyboardButton.WithCallbackData("🗂 Delete Words",  "menu_delete_words") },
-        new[] { InlineKeyboardButton.WithCallbackData("✏️ My Name",       "menu_set_name") }
+        new[] { InlineKeyboardButton.WithCallbackData("⚙️ Settings",      "menu_settings") }
     });
 
     public static InlineKeyboardMarkup StudentMenu() => new(new[]
@@ -45,7 +45,16 @@ public static class Keyboards
             InlineKeyboardButton.WithCallbackData("💪 Mistakes",       "menu_mistakes"),
             InlineKeyboardButton.WithCallbackData("🔍 Search Words",   "menu_search")
         },
-        new[] { InlineKeyboardButton.WithCallbackData("✏️ My Name",    "menu_set_name") }
+        new[] { InlineKeyboardButton.WithCallbackData("⚙️ Settings",      "menu_settings") }
+    });
+
+    public static InlineKeyboardMarkup AccountSettingsMenu(bool wordsExpandedByDefault) => new(new[]
+    {
+        new[] { InlineKeyboardButton.WithCallbackData("✏️ Display Name", "settings_set_name") },
+        new[] { InlineKeyboardButton.WithCallbackData(
+            wordsExpandedByDefault ? "📖 Words: Expanded by default ✓" : "📖 Words: Collapsed by default",
+            "settings_toggle_expand") },
+        new[] { InlineKeyboardButton.WithCallbackData("⬅️ Back", "back_to_menu") }
     });
 
     public static InlineKeyboardMarkup RoleSelection() => new(new[]
@@ -173,13 +182,14 @@ public static class Keyboards
         int wordCount,
         IReadOnlySet<int> expanded,
         string togglePrefix,
-        InlineKeyboardButton[][]? actionRows = null)
+        InlineKeyboardButton[][]? actionRows = null,
+        bool expandedByDefault = false)
     {
         const int buttonsPerRow = 5;
         var rows = Enumerable.Range(0, wordCount)
             .Chunk(buttonsPerRow)
             .Select(chunk => chunk.Select(i => InlineKeyboardButton.WithCallbackData(
-                expanded.Contains(i) ? $"{i + 1}✕" : $"{i + 1}≡", $"{togglePrefix}{i}")).ToArray())
+                expanded.Contains(i) ? $"{i + 1} ✅" : $"{i + 1} ⬜", $"{togglePrefix}{i}")).ToArray())
             .ToList<InlineKeyboardButton[]>();
 
         if (actionRows is not null)

@@ -249,17 +249,22 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
             : $"\n\n{words.Count} word{(words.Count == 1 ? "" : "s")}";
         var header = state.VocabHeader;
 
+        var user = await Db.GetUserAsync(userId);
+        var expandByDefault = user?.Settings.WordsExpandedByDefault ?? false;
+        var expanded = InitialExpandedSet(entries.Count, expandByDefault);
+
         MutateState(userId, s =>
         {
             s.ActiveWordLines = entries;
             s.ActiveWordHeader = header;
             s.ActiveWordContext = "vocab";
-            s.ExpandedWordIndices = new();
+            s.ExpandedWordIndices = expanded;
+            s.WordsExpandedByDefault = expandByDefault;
         });
 
-        var body = BuildExpandableBody(entries, new HashSet<int>());
+        var body = BuildExpandableBody(entries, expanded, expandByDefault);
         var text = $"{header}\n\n{body}{pageInfo}";
-        var keyboard = Keyboards.ExpandableWordKeyboard(entries.Count, new HashSet<int>(), "wexp_", Keyboards.VocabPageActionRows(page, totalPages));
+        var keyboard = Keyboards.ExpandableWordKeyboard(entries.Count, expanded, "wexp_", Keyboards.VocabPageActionRows(page, totalPages));
 
         var existingMsgId = GetState(userId).ActiveWordMessageId;
         if (!isNew && existingMsgId != 0)
@@ -305,7 +310,7 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
         });
 
         state = GetState(userId);
-        var body = BuildExpandableBody(state.ActiveWordLines, state.ExpandedWordIndices);
+        var body = BuildExpandableBody(state.ActiveWordLines, state.ExpandedWordIndices, state.WordsExpandedByDefault);
 
         string text;
         InlineKeyboardButton[][] actionRows;
@@ -453,19 +458,24 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
         var topicNote = state.GenTopic is not null ? $" · {state.GenTopic}" : string.Empty;
         var header = $"🤖 {state.GenPreview.Count} {state.GenLevelDisplay} words{topicNote}:";
 
+        var user = await Db.GetUserAsync(userId);
+        var expandByDefault = user?.Settings.WordsExpandedByDefault ?? false;
+        var expanded = InitialExpandedSet(entries.Count, expandByDefault);
+
         MutateState(userId, s =>
         {
             s.ActiveWordLines = entries;
             s.ActiveWordHeader = header;
             s.ActiveWordContext = "sgen";
-            s.ExpandedWordIndices = new();
+            s.ExpandedWordIndices = expanded;
+            s.WordsExpandedByDefault = expandByDefault;
         });
 
-        var body = BuildExpandableBody(entries, new HashSet<int>());
+        var body = BuildExpandableBody(entries, expanded, expandByDefault);
         var msg = await Bot.SendMessage(
             chatId,
             $"{header}\n\n{body}",
-            replyMarkup: Keyboards.ExpandableWordKeyboard(entries.Count, new HashSet<int>(), "wexp_", Keyboards.SGenPreviewActionRows()),
+            replyMarkup: Keyboards.ExpandableWordKeyboard(entries.Count, expanded, "wexp_", Keyboards.SGenPreviewActionRows()),
             cancellationToken: ct);
 
         MutateState(userId, s => s.ActiveWordMessageId = msg.MessageId);

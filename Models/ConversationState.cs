@@ -92,7 +92,8 @@ public sealed class ConversationState
     // ── Expandable word message tracking ─────────────────────────────────────
     public int ActiveWordMessageId { get; set; }
     public string ActiveWordHeader { get; set; } = "";
-    public string ActiveWordContext { get; set; } = ""; // "gen" | "sgen" | "vocab"
+    public string ActiveWordContext { get; set; } = ""; // "gen" | "sgen" | "vocab" | "entry"
     public HashSet<int> ExpandedWordIndices { get; set; } = new();
     public List<WordDisplayEntry> ActiveWordLines { get; set; } = new();
+    public bool WordsExpandedByDefault { get; set; }
 }

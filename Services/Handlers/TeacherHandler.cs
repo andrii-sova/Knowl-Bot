@@ -249,7 +249,7 @@ public sealed class TeacherHandler(
         });
 
         state = GetState(userId);
-        var body = BuildExpandableBody(state.ActiveWordLines, state.ExpandedWordIndices);
+        var body = BuildExpandableBody(state.ActiveWordLines, state.ExpandedWordIndices, state.WordsExpandedByDefault);
         var text = $"{state.ActiveWordHeader}\n\n{body}";
 
         try
@@ -746,21 +746,25 @@ public sealed class TeacherHandler(
         var header = $"🤖 *{state.GenPreview.Count} {state.GenLevelDisplay} words* for *{WordFormatter.EscapeMarkdown(student?.DisplayName ?? string.Empty)}*{topicNote}:";
 
         var entries = state.GenPreview.Select(WordFormatter.ToDisplayEntry).ToList();
+        var teacher = await Db.GetUserAsync(userId);
+        var expandByDefault = teacher?.Settings.WordsExpandedByDefault ?? false;
+        var expanded = InitialExpandedSet(entries.Count, expandByDefault);
 
         MutateState(userId, s =>
         {
             s.ActiveWordLines = entries;
             s.ActiveWordHeader = header;
             s.ActiveWordContext = "gen";
-            s.ExpandedWordIndices = new();
+            s.ExpandedWordIndices = expanded;
+            s.WordsExpandedByDefault = expandByDefault;
         });
 
-        var body = BuildExpandableBody(entries, new HashSet<int>());
+        var body = BuildExpandableBody(entries, expanded, expandByDefault);
         var msg = await Bot.SendMessage(
             chatId,
             $"{header}\n\n{body}",
             parseMode: ParseMode.Markdown,
-            replyMarkup: Keyboards.ExpandableWordKeyboard(entries.Count, new HashSet<int>(), "gexp_", Keyboards.GenPreviewActionRows()),
+            replyMarkup: Keyboards.ExpandableWordKeyboard(entries.Count, expanded, "gexp_", Keyboards.GenPreviewActionRows()),
             cancellationToken: ct);
 
         MutateState(userId, s => s.ActiveWordMessageId = msg.MessageId);

@@ -107,8 +107,13 @@ public sealed class DatabaseService : IDatabaseService
         var clean = string.IsNullOrWhiteSpace(name) ? null : name.Trim();
         await _users.UpdateOneAsync(
             u => u.TelegramId == userId,
-            Builders<User>.Update.Set(u => u.DisplayNameOverride, clean));
+            Builders<User>.Update.Set(u => u.Settings.DisplayNameOverride, clean));
     }
+
+    public async Task UpdateWordsExpandedDefaultAsync(long userId, bool expanded) =>
+        await _users.UpdateOneAsync(
+            u => u.TelegramId == userId,
+            Builders<User>.Update.Set(u => u.Settings.WordsExpandedByDefault, expanded));
 
     public async Task<bool> IsStudentLinkedToAnyTeacherAsync(long studentId)
     {

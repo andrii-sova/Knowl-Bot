@@ -9,6 +9,7 @@ public interface IDatabaseService
     Task<User?> GetUserByUsernameAsync(string username);
     Task UpsertUserAsync(User user);
     Task UpdateDisplayNameAsync(long userId, string? name);
+    Task UpdateWordsExpandedDefaultAsync(long userId, bool expanded);
     Task<bool> IsStudentLinkedToAnyTeacherAsync(long studentId);
     Task LinkTeacherStudentAsync(long teacherId, long studentId);
     Task UnlinkTeacherStudentAsync(long teacherId, long studentId);
