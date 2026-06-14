@@ -302,12 +302,17 @@ public sealed class TeacherHandler(
         }
 
         var student = await Db.GetUserAsync(studentId.Value);
-        var body = string.Join("\n\n", results.Select(WordFormatter.FormatWordLine));
+        var teacher = await Db.GetUserAsync(userId);
+        var expandByDefault = teacher?.Settings.WordsExpandedByDefault ?? false;
+        var entries = results.Select(WordFormatter.ToDisplayEntry).ToList();
+        var expanded = InitialExpandedSet(entries.Count, expandByDefault);
+        var body = BuildExpandableBody(entries, expanded, expandByDefault);
+
         await Bot.SendMessage(
             chatId,
             $"🔍 *{results.Count}* result(s) for *{WordFormatter.EscapeMarkdown(query)}* in {WordFormatter.EscapeMarkdown(student?.DisplayName ?? string.Empty)}'s vocabulary:\n\n{body}",
             parseMode: ParseMode.Markdown,
-            replyMarkup: navigation,
+            replyMarkup: Keyboards.ExpandableWordKeyboard(entries.Count, expanded, "gexp_", navigation.InlineKeyboard.Select(r => r.ToArray()).ToArray()),
             cancellationToken: ct);
     }
 
@@ -482,11 +487,20 @@ public sealed class TeacherHandler(
         SetState(userId, state);
 
         var student = await Db.GetUserAsync(state.SelectedStudentId.Value);
+        var teacher = await Db.GetUserAsync(userId);
+        var expandByDefault = teacher?.Settings.WordsExpandedByDefault ?? false;
         var levelLabel = state.PoolLevel is not null ? $" *[{state.PoolLevel}]*" : string.Empty;
         var header = $"🎯 Preview — {words.Count} words{levelLabel} for *{WordFormatter.EscapeMarkdown(student?.DisplayName ?? string.Empty)}*:";
+        var entries = words.Select(WordFormatter.ToDisplayEntry).ToList();
+        var expanded = InitialExpandedSet(entries.Count, expandByDefault);
+        var body = BuildExpandableBody(entries, expanded, expandByDefault);
 
-        await SendWordListAsync(chatId, words.Select(WordFormatter.FormatWordLine).ToList(), ct,
-            header: header, finalMarkup: Keyboards.PoolPreviewButtons());
+        await Bot.SendMessage(
+            chatId,
+            $"{header}\n\n{body}",
+            parseMode: ParseMode.Markdown,
+            replyMarkup: Keyboards.ExpandableWordKeyboard(entries.Count, expanded, "gexp_", Keyboards.PoolPreviewButtons().InlineKeyboard.Select(r => r.ToArray()).ToArray()),
+            cancellationToken: ct);
     }
 
     private async Task ConfirmPoolPreviewAsync(long userId, long chatId, CancellationToken ct)
@@ -516,8 +530,8 @@ public sealed class TeacherHandler(
         if (state.SelectedStudentId.Value != userId)
         try
         {
-            var notifyHeader = $"📚 New vocabulary from {WordFormatter.EscapeMarkdown(teacher?.DisplayName ?? "your teacher")}{WordFormatter.EscapeMarkdown(levelLabel)}:";
-            await SendWordListAsync(state.SelectedStudentId.Value, state.PoolPreview.Select(WordFormatter.FormatWordLine).ToList(), ct, header: notifyHeader);
+            var notifyHeader = $"📚 New vocabulary from {WordFormatter.EscapeMarkdown(teacher?.DisplayName ?? "your teacher")}{levelLabel}:";
+            await SendExpandableWordNotificationAsync(state.SelectedStudentId.Value, state.SelectedStudentId.Value, state.PoolPreview, notifyHeader, ct);
         }
         catch
         {
@@ -677,16 +691,17 @@ public sealed class TeacherHandler(
 
         MutateState(userId, s => s.State = UserState.AwaitingWordRemoval);
 
-        var numbered = string.Join("\n", state.GenPreview.Select((w, i) =>
-        {
-            return $"{i + 1}. {WordFormatter.FormatPendingLine(w)}";
-        }));
+        var teacher = await Db.GetUserAsync(userId);
+        var expandByDefault = teacher?.Settings.WordsExpandedByDefault ?? false;
+        var entries = state.GenPreview.Select(WordFormatter.ToDisplayEntry).ToList();
+        var expanded = InitialExpandedSet(entries.Count, expandByDefault);
+        var body = BuildExpandableBody(entries, expanded, expandByDefault);
 
         await Bot.SendMessage(
             chatId,
-            $"✂️ *Remove words from preview*\n\n{numbered}\n\n_Enter the numbers to remove, separated by commas (e.g. `2, 4`):_",
+            $"✂️ *Remove words from preview*\n\n{body}\n\n_Enter the numbers to remove, separated by commas (e.g. `2, 4`):_",
             parseMode: ParseMode.Markdown,
-            replyMarkup: Keyboards.BackButton("gen_retry"),
+            replyMarkup: Keyboards.ExpandableWordKeyboard(entries.Count, expanded, "gexp_", Keyboards.BackButton("gen_retry").InlineKeyboard.Select(r => r.ToArray()).ToArray()),
             cancellationToken: ct);
     }
 
@@ -802,7 +817,7 @@ public sealed class TeacherHandler(
         {
             var topicNote = state.GenTopic is not null ? $" · {WordFormatter.EscapeMarkdown(state.GenTopic)}" : string.Empty;
             var notifyHeader = $"📚 New *{state.GenLevelDisplay}* vocabulary from {WordFormatter.EscapeMarkdown(teacher?.DisplayName ?? "your teacher")}{topicNote}:";
-            await SendWordListAsync(state.SelectedStudentId.Value, state.GenPreview.Select(WordFormatter.FormatPendingLine).ToList(), ct, header: notifyHeader);
+            await SendExpandablePendingNotificationAsync(state.SelectedStudentId.Value, state.SelectedStudentId.Value, state.GenPreview, notifyHeader, ct);
         }
         catch
         {
@@ -1076,27 +1091,38 @@ public sealed class TeacherHandler(
             header = $"💬 Message {index + 1}/{groups.Count} — {page[0].CreatedAt:dd MMM yyyy HH:mm} ({page.Count} words)";
         }
 
-        var body = string.Join("\n\n", page.Select(WordFormatter.FormatWordLine));
+        var teacher = await Db.GetUserAsync(userId);
+        var expandByDefault = teacher?.Settings.WordsExpandedByDefault ?? false;
+        var entries = page.Select(WordFormatter.ToDisplayEntry).ToList();
+        var expanded = InitialExpandedSet(entries.Count, expandByDefault);
+        var body = BuildExpandableBody(entries, expanded, expandByDefault);
+
         await Bot.SendMessage(
             chatId,
             $"{header}\n\n{body}",
             parseMode: ParseMode.Markdown,
-            replyMarkup: Keyboards.BrowseNavigation(hasPrev, hasMore),
+            replyMarkup: Keyboards.ExpandableWordKeyboard(entries.Count, expanded, "gexp_", Keyboards.BrowseNavigation(hasPrev, hasMore).InlineKeyboard.Select(r => r.ToArray()).ToArray()),
             cancellationToken: ct);
     }
 
-    private async Task SendAllWordsAsync(long chatId, IReadOnlyList<Word> words, CancellationToken ct)
+    private async Task SendAllWordsAsync(long userId, long chatId, IReadOnlyList<Word> words, CancellationToken ct)
     {
+        var teacher = await Db.GetUserAsync(userId);
+        var expandByDefault = teacher?.Settings.WordsExpandedByDefault ?? false;
+
         for (var i = 0; i < words.Count; i += ChunkSize)
         {
             var slice = words.Skip(i).Take(ChunkSize).ToList();
             var header = $"📋 Words {i + 1}–{i + slice.Count} of {words.Count}";
-            var body = string.Join("\n\n", slice.Select(WordFormatter.FormatWordLine));
+            var entries = slice.Select(WordFormatter.ToDisplayEntry).ToList();
+            var expanded = InitialExpandedSet(entries.Count, expandByDefault);
+            var body = BuildExpandableBody(entries, expanded, expandByDefault);
 
             await Bot.SendMessage(
                 chatId,
                 $"{header}\n\n{body}",
                 parseMode: ParseMode.Markdown,
+                replyMarkup: Keyboards.ExpandableWordKeyboard(entries.Count, expanded, "gexp_"),
                 cancellationToken: ct);
         }
     }

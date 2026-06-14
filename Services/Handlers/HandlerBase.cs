@@ -1,5 +1,6 @@
 using Telegram.Bot;
 using Telegram.Bot.Types.ReplyMarkups;
+using Telegram.Bot.Types.Enums;
 using KnowlBot.Interfaces;
 using KnowlBot.Models;
 using KnowlBot.UI;
@@ -102,4 +103,46 @@ public abstract class HandlerBase(ITelegramBotClient bot, IDatabaseService db, C
 
     protected static HashSet<int> InitialExpandedSet(int count, bool expandByDefault) =>
         expandByDefault ? new HashSet<int>(Enumerable.Range(0, count)) : new HashSet<int>();
+
+    protected async Task SendExpandableWordNotificationAsync(
+        long recipientUserId,
+        long recipientChatId,
+        IReadOnlyList<Word> words,
+        string header,
+        CancellationToken ct)
+    {
+        var recipient = await Db.GetUserAsync(recipientUserId);
+        var expandByDefault = recipient?.Settings.WordsExpandedByDefault ?? false;
+        var entries = words.Select(WordFormatter.ToDisplayEntry).ToList();
+        var expanded = InitialExpandedSet(entries.Count, expandByDefault);
+        var body = BuildExpandableBody(entries, expanded, expandByDefault);
+
+        await Bot.SendMessage(
+            recipientChatId,
+            $"{header}\n\n{body}",
+            parseMode: ParseMode.Markdown,
+            replyMarkup: Keyboards.ExpandableWordKeyboard(entries.Count, expanded, "wexp_"),
+            cancellationToken: ct);
+    }
+
+    protected async Task SendExpandablePendingNotificationAsync(
+        long recipientUserId,
+        long recipientChatId,
+        IReadOnlyList<PendingWordEntry> entries,
+        string header,
+        CancellationToken ct)
+    {
+        var recipient = await Db.GetUserAsync(recipientUserId);
+        var expandByDefault = recipient?.Settings.WordsExpandedByDefault ?? false;
+        var displayEntries = entries.Select(WordFormatter.ToDisplayEntry).ToList();
+        var expanded = InitialExpandedSet(displayEntries.Count, expandByDefault);
+        var body = BuildExpandableBody(displayEntries, expanded, expandByDefault);
+
+        await Bot.SendMessage(
+            recipientChatId,
+            $"{header}\n\n{body}",
+            parseMode: ParseMode.Markdown,
+            replyMarkup: Keyboards.ExpandableWordKeyboard(displayEntries.Count, expanded, "wexp_"),
+            cancellationToken: ct);
+    }
 }

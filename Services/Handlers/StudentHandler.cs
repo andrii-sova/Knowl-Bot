@@ -141,11 +141,16 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
             return;
         }
 
-        var body = string.Join("\n\n", results.Select(WordFormatter.FormatWordLine));
+        var user = await Db.GetUserAsync(userId);
+        var expandByDefault = user?.Settings.WordsExpandedByDefault ?? false;
+        var entries = results.Select(WordFormatter.ToDisplayEntry).ToList();
+        var expanded = InitialExpandedSet(entries.Count, expandByDefault);
+        var body = BuildExpandableBody(entries, expanded, expandByDefault);
+
         await Bot.SendMessage(
             chatId,
             $"🔍 {results.Count} result(s) for \"{query}\":\n\n{body}",
-            replyMarkup: Keyboards.SearchResultNavigation(),
+            replyMarkup: Keyboards.ExpandableWordKeyboard(entries.Count, expanded, "wexp_", Keyboards.SearchResultNavigation().InlineKeyboard.Select(r => r.ToArray()).ToArray()),
             cancellationToken: ct);
     }
 
@@ -548,14 +553,17 @@ public sealed class StudentHandler(ITelegramBotClient bot, IDatabaseService db, 
 
         MutateState(userId, s => s.State = UserState.AwaitingWordRemoval);
 
-        var numbered = string.Join("\n", state.GenPreview.Select((w, i) =>
-            $"{i + 1}. {WordFormatter.FormatPendingLine(w)}"));
+        var user = await Db.GetUserAsync(userId);
+        var expandByDefault = user?.Settings.WordsExpandedByDefault ?? false;
+        var entries = state.GenPreview.Select(WordFormatter.ToDisplayEntry).ToList();
+        var expanded = InitialExpandedSet(entries.Count, expandByDefault);
+        var body = BuildExpandableBody(entries, expanded, expandByDefault);
 
         await Bot.SendMessage(
             chatId,
-            $"✂️ *Remove words from preview*\n\n{numbered}\n\n_Enter the numbers to remove, e.g. `2, 4`:_",
+            $"✂️ *Remove words from preview*\n\n{body}\n\n_Enter the numbers to remove, e.g. `2, 4`:_",
             parseMode: ParseMode.Markdown,
-            replyMarkup: Keyboards.BackButton("sgen_retry"),
+            replyMarkup: Keyboards.ExpandableWordKeyboard(entries.Count, expanded, "wexp_", Keyboards.BackButton("sgen_retry").InlineKeyboard.Select(r => r.ToArray()).ToArray()),
             cancellationToken: ct);
     }
 

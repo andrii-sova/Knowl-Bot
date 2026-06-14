@@ -205,11 +205,10 @@ public sealed class WordEntryHandler(
             var teacher = await Db.GetUserAsync(state.PendingAddedByUserId.Value);
             var topicLine = topic is not null ? $"\n🏷️ Topic: {topic}" : string.Empty;
             var header = $"📚 New vocabulary from {teacher?.DisplayName ?? "your teacher"}:{topicLine}";
-            var wordLines = state.PendingWords.Select(WordFormatter.FormatPendingLine).ToList();
 
             try
             {
-                await SendWordListAsync(state.PendingForStudentId.Value, wordLines, ct, header: header);
+                await SendExpandablePendingNotificationAsync(state.PendingForStudentId.Value, state.PendingForStudentId.Value, state.PendingWords, header, ct);
             }
             catch
             {
